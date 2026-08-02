@@ -60,6 +60,9 @@ auto PacketWriter::WriteFully(const uint8_t *buffer, size_t length) -> bool {
   while (offset < length) {
     ssize_t write_size =
         send(fd_, buffer + offset, length - offset, MSG_NOSIGNAL);
+    if (write_size == 0) {
+      return false;
+    }
     if (write_size < 0) {
       if (errno == EINTR) {
         continue;

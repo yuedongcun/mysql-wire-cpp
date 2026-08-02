@@ -78,8 +78,7 @@ enum class Command : uint8_t {
  * MySQL enum_field_types values used in Protocol::ColumnDefinition41.
  *
  * ColumnDefinition41 type field:
- * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/
- * page_protocol_com_query_response_text_resultset_column_definition.html
+ * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_query_response_text_resultset_column_definition.html
  *
  * enum_field_types source definition:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/field__types_8h_source.html

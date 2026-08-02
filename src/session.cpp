@@ -286,7 +286,7 @@ auto MysqlSession::MakeHandshakePayload() -> std::vector<uint8_t> {
   std::vector<uint8_t> payload;
   // The frontend does not authenticate clients, but the protocol still requires
   // auth-plugin data and an advertised plugin name in the handshake packet.
-  const std::string auth_plugin_data = "12345678abcdefghijklmnop";
+  const std::string auth_plugin_data = "12345678abcdefghijkl";
 
   AppendInt1(&payload, MYSQL_PROTOCOL_VERSION); // protocol_version
   AppendNullTerminatedString(&payload, MYSQL_SERVER_VERSION); // server_version
@@ -306,8 +306,11 @@ auto MysqlSession::MakeHandshakePayload() -> std::vector<uint8_t> {
     AppendInt1(&payload, 0); // reserved
   }
   AppendBytes(&payload, auth_plugin_data.substr(8)); // auth_plugin_data_part_2
+  // mysql_native_password consumes a 20-byte challenge as a NUL-terminated
+  // message. The trailing zero is framing, not part of the random challenge.
+  AppendInt1(&payload, 0);
   AppendNullTerminatedString(&payload,
-                             "mysql_native_password"); // auth_plugin_name
+                             MYSQL_AUTH_PLUGIN_NAME); // auth_plugin_name
   return payload;
 }
 

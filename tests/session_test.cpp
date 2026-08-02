@@ -105,38 +105,50 @@ auto MakeHandshakeResponse() -> std::vector<uint8_t> {
   return payload;
 }
 
-void TestSessionUsesInjectedExecutor() {
-  auto executor = std::make_shared<FakeSqlExecutor>();
-  SessionHarness harness(executor);
-  mysql_wire::PacketReader reader(harness.ClientFd());
-  mysql_wire::PacketWriter writer(harness.ClientFd());
-
-  auto handshake = reader.ReadPacket();
+void CompleteHandshake(mysql_wire::PacketReader *reader,
+                       mysql_wire::PacketWriter *writer) {
+  auto handshake = reader->ReadPacket();
   Require(handshake.has_value() && !handshake->payload_.empty(),
           "missing handshake");
   Require(handshake->sequence_id_ == 0, "handshake sequence mismatch");
   Require(handshake->payload_[0] == mysql_wire::MYSQL_PROTOCOL_VERSION,
           "protocol version mismatch");
+  const size_t auth_plugin_data_len_offset =
+      1 + std::string(mysql_wire::MYSQL_SERVER_VERSION).size() + 1 + 4 + 8 + 1 +
+      2 + 1 + 2 + 2;
+  Require(handshake->payload_.size() > auth_plugin_data_len_offset,
+          "truncated handshake payload");
+  Require(handshake->payload_[auth_plugin_data_len_offset] == 21,
+          "auth plugin data length mismatch");
+  const size_t auth_plugin_data_terminator_offset =
+      auth_plugin_data_len_offset + 1 + 10 + 12;
+  Require(handshake->payload_.size() > auth_plugin_data_terminator_offset,
+          "truncated auth plugin data");
+  Require(handshake->payload_[auth_plugin_data_terminator_offset] == 0,
+          "auth plugin data is not terminated");
 
-  Require(writer.WritePacket(1, MakeHandshakeResponse()),
+  Require(writer->WritePacket(1, MakeHandshakeResponse()),
           "handshake response write failed");
-  auto auth_result = reader.ReadPacket();
+  auto auth_result = reader->ReadPacket();
   Require(auth_result.has_value() && !auth_result->payload_.empty(),
           "missing auth result");
   Require(auth_result->sequence_id_ == 2 && auth_result->payload_[0] == 0x00,
           "authentication failed");
+}
 
-  std::vector<uint8_t> query;
-  mysql_wire::AppendInt1(&query,
-                         static_cast<uint8_t>(mysql_wire::Command::QUERY));
-  mysql_wire::AppendBytes(&query, "  SELECT delegated;  ");
-  Require(writer.WritePacket(0, query), "query write failed");
+auto MakeCommand(mysql_wire::Command command, const std::string &body = {})
+    -> std::vector<uint8_t> {
+  std::vector<uint8_t> payload{static_cast<uint8_t>(command)};
+  mysql_wire::AppendBytes(&payload, body);
+  return payload;
+}
 
-  auto column_count = reader.ReadPacket();
-  auto column_definition = reader.ReadPacket();
-  auto metadata_eof = reader.ReadPacket();
-  auto row = reader.ReadPacket();
-  auto resultset_eof = reader.ReadPacket();
+auto ReadSingleColumnRow(mysql_wire::PacketReader *reader) -> std::string {
+  auto column_count = reader->ReadPacket();
+  auto column_definition = reader->ReadPacket();
+  auto metadata_eof = reader->ReadPacket();
+  auto row = reader->ReadPacket();
+  auto resultset_eof = reader->ReadPacket();
   Require(column_count.has_value() &&
               column_count->payload_ == std::vector<uint8_t>({1}),
           "column count mismatch");
@@ -146,9 +158,26 @@ void TestSessionUsesInjectedExecutor() {
   Require(row.has_value() && !row->payload_.empty(), "missing result row");
   Require(resultset_eof.has_value() && resultset_eof->payload_[0] == 0xfe,
           "missing resultset EOF");
-  Require(std::string(row->payload_.begin() + 1, row->payload_.end()) ==
-              "fake-result",
-          "row mismatch");
+  Require(row->payload_[0] == row->payload_.size() - 1,
+          "unexpected row encoding");
+  return {row->payload_.begin() + 1, row->payload_.end()};
+}
+
+void TestSessionUsesInjectedExecutor() {
+  auto executor = std::make_shared<FakeSqlExecutor>();
+  SessionHarness harness(executor);
+  mysql_wire::PacketReader reader(harness.ClientFd());
+  mysql_wire::PacketWriter writer(harness.ClientFd());
+
+  CompleteHandshake(&reader, &writer);
+
+  std::vector<uint8_t> query;
+  mysql_wire::AppendInt1(&query,
+                         static_cast<uint8_t>(mysql_wire::Command::QUERY));
+  mysql_wire::AppendBytes(&query, "  SELECT delegated;  ");
+  Require(writer.WritePacket(0, query), "query write failed");
+
+  Require(ReadSingleColumnRow(&reader) == "fake-result", "row mismatch");
 
   const std::vector<uint8_t> quit{
       static_cast<uint8_t>(mysql_wire::Command::QUIT)};
@@ -162,11 +191,56 @@ void TestSessionUsesInjectedExecutor() {
           "database context mismatch");
 }
 
+void TestSessionHandlesControlAndCompatibilityCommands() {
+  auto executor = std::make_shared<FakeSqlExecutor>();
+  SessionHarness harness(executor);
+  mysql_wire::PacketReader reader(harness.ClientFd());
+  mysql_wire::PacketWriter writer(harness.ClientFd());
+  CompleteHandshake(&reader, &writer);
+
+  Require(writer.WritePacket(0, MakeCommand(mysql_wire::Command::PING)),
+          "ping write failed");
+  auto ping_result = reader.ReadPacket();
+  Require(ping_result.has_value() && ping_result->sequence_id_ == 1 &&
+              !ping_result->payload_.empty() &&
+              ping_result->payload_[0] == 0x00,
+          "ping response mismatch");
+
+  Require(writer.WritePacket(
+              0, MakeCommand(mysql_wire::Command::INIT_DB, "missing")),
+          "invalid database command write failed");
+  auto bad_database = reader.ReadPacket();
+  Require(bad_database.has_value() && !bad_database->payload_.empty() &&
+              bad_database->payload_[0] == 0xff,
+          "invalid database should return ERR");
+
+  Require(writer.WritePacket(
+              0, MakeCommand(mysql_wire::Command::INIT_DB, "testdb")),
+          "database command write failed");
+  auto database_result = reader.ReadPacket();
+  Require(database_result.has_value() && !database_result->payload_.empty() &&
+              database_result->payload_[0] == 0x00,
+          "database selection should return OK");
+
+  Require(writer.WritePacket(
+              0, MakeCommand(mysql_wire::Command::QUERY, "SELECT DATABASE()")),
+          "compatibility query write failed");
+  Require(ReadSingleColumnRow(&reader) == "testdb",
+          "selected database result mismatch");
+  Require(executor->last_sql_.empty(),
+          "compatibility query should not reach the executor");
+
+  Require(writer.WritePacket(0, MakeCommand(mysql_wire::Command::QUIT)),
+          "quit write failed");
+  harness.Join();
+}
+
 } // namespace
 
 auto main() -> int {
   try {
     TestSessionUsesInjectedExecutor();
+    TestSessionHandlesControlAndCompatibilityCommands();
   } catch (const std::exception &error) {
     std::cerr << "session_test failed: " << error.what() << '\n';
     return 1;

@@ -22,8 +22,7 @@ auto NextSequence(uint8_t *sequence_id) -> uint8_t {
 
 /**
  * MySQL 8.0.46 Protocol::ColumnDefinition41:
- * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/
- * page_protocol_com_query_response_text_resultset_column_definition.html
+ * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_query_response_text_resultset_column_definition.html
  */
 auto MakeColumnDefinitionPayload(const SqlColumn &column)
     -> std::vector<uint8_t> {
