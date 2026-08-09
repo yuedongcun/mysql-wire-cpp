@@ -2,6 +2,22 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file query_result.h
+ * @brief SQL-engine-neutral request context and result data model.
+ *
+ * This is the seam between an embedded SQL engine and the wire frontend:
+ *
+ * @code{.text}
+ * MysqlSession -> SqlExecutor -> SqlQueryResult -> result encoder -> client
+ *                    ^                |
+ *                    +-- MysqlQueryContext
+ * @endcode
+ *
+ * Cells are represented as strings because MySQL's text protocol sends each
+ * non-NULL value as a length-encoded byte string.
+ */
+
 #pragma once
 
 #include <cstdint>

@@ -1,6 +1,14 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file packet_test.cpp
+ * @brief Unit tests for primitive encodings and framed packet socket I/O.
+ *
+ * A local socketpair verifies the same byte stream contract without opening a
+ * TCP port or depending on a MySQL client installation.
+ */
+
 #include <sys/socket.h>
 #include <unistd.h>
 

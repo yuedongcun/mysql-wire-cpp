@@ -2,6 +2,14 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file constants.h
+ * @brief Protocol constants shared by handshake, command, and response code.
+ *
+ * The numeric values in this file are part of the MySQL wire contract. Keep
+ * them independent of any SQL engine so the frontend remains embeddable.
+ */
+
 #pragma once
 
 #include <cstdint>

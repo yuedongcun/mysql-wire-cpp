@@ -2,6 +2,14 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file result_encoder.cpp
+ * @brief Encodes logical SQL results as MySQL text-protocol responses.
+ *
+ * This implementation owns OK, ERR, EOF, ColumnDefinition41, and text-row
+ * payload construction. Packet framing and socket I/O remain in packet.cpp.
+ */
+
 #include "mysql_wire/result_encoder.h"
 
 #include <cstdint>

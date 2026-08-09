@@ -2,6 +2,28 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file session.h
+ * @brief Connection-local MySQL handshake and command-loop state machine.
+ *
+ * A session owns an accepted socket for its entire lifetime:
+ *
+ * @code{.text}
+ * server                     client
+ *   |---- HandshakeV10 -------->|
+ *   |<--- HandshakeResponse41 --|
+ *   |---- OK / ERR ------------>|
+ *   |                           |
+ *   |<--- COM_* ----------------|  command phase (repeats)
+ *   |---- OK / ERR / resultset >|
+ *   |                           |
+ *   +-- close on EOF, error, or COM_QUIT
+ * @endcode
+ *
+ * Capability negotiation and the selected database are stored per session;
+ * SQL execution itself is delegated through the shared SqlExecutor.
+ */
+
 #pragma once
 
 #include <cstdint>

@@ -2,6 +2,25 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file packet.h
+ * @brief Socket-level MySQL packet I/O and primitive wire encoders.
+ *
+ * Every packet handled here has the following on-the-wire layout:
+ *
+ * @code{.text}
+ * byte offset   0              3 4
+ *               +---------------+-------------+
+ *               | payload len   | sequence id | payload ...
+ *               | (3-byte LE)   | (1 byte)    |
+ *               +---------------+-------------+
+ * @endcode
+ *
+ * PacketReader removes the four-byte header; MysqlPacket therefore stores
+ * only the sequence id and payload. PacketWriter performs the inverse step.
+ * Multi-packet payloads (16 MiB and larger) are intentionally out of scope.
+ */
+
 #pragma once
 
 #include <cstdint>

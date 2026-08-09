@@ -2,6 +2,20 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file result_encoder.h
+ * @brief Converts SqlQueryResult values into MySQL response packet sequences.
+ *
+ * @code{.text}
+ * OK     -> OK packet
+ * ERROR  -> ERR packet
+ * ROWS   -> column count -> column definitions -> EOF
+ *                       -> text rows          -> EOF
+ * @endcode
+ *
+ * Each arrow between response elements advances the packet sequence id.
+ */
+
 #pragma once
 
 #include <cstdint>

@@ -2,6 +2,15 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file packet.cpp
+ * @brief Implements exact socket reads/writes and MySQL primitive encodings.
+ *
+ * Short POSIX I/O operations and EINTR are handled internally so callers see
+ * only complete packets. Integer helpers append the little-endian and
+ * length-encoded forms used throughout the protocol.
+ */
+
 #include "mysql_wire/packet.h"
 
 #include <sys/socket.h>

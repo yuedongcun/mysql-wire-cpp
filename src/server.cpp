@@ -2,6 +2,14 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file server.cpp
+ * @brief Implements the POSIX TCP listener and per-connection worker launch.
+ *
+ * ServeForever binds and listens once, then transfers every accepted socket
+ * to a detached thread running MysqlSession.
+ */
+
 #include "mysql_wire/server.h"
 
 #include <arpa/inet.h>

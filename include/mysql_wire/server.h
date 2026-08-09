@@ -2,6 +2,20 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file server.h
+ * @brief TCP acceptor that creates one MySQL protocol session per client.
+ *
+ * @code{.text}
+ * listen socket -> accept -> detached worker -> MysqlSession
+ *                                      |
+ *                                      +-> shared SqlExecutor
+ * @endcode
+ *
+ * The executor is shared by all sessions and must provide whatever
+ * synchronization its SQL engine requires.
+ */
+
 #pragma once
 
 #include <cstdint>

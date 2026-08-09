@@ -2,6 +2,15 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file sql_executor.h
+ * @brief Embedding interface between the protocol frontend and a SQL engine.
+ *
+ * ExecuteQuery first handles the small compatibility subset required by the
+ * mysql CLI (for example DATABASE(), CONNECTION_ID(), and USE). All remaining
+ * statements cross the SqlExecutor boundary and are owned by the host engine.
+ */
+
 #pragma once
 
 #include <string>

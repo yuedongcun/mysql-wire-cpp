@@ -2,6 +2,15 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file session.cpp
+ * @brief Implements handshake parsing, session state, and COM_* dispatch.
+ *
+ * The parser validates HandshakeResponse41 according to negotiated capability
+ * flags. Once authenticated, HandleCommand routes control commands locally
+ * and COM_QUERY through ExecuteQuery and the result encoder.
+ */
+
 #include "mysql_wire/session.h"
 
 #include <unistd.h>
@@ -186,9 +195,8 @@ auto ResultKindName(SqlResultKind kind) -> const char * {
 
 MysqlSession::MysqlSession(int fd, std::shared_ptr<SqlExecutor> executor,
                            uint32_t connection_id)
-    : fd_(fd), executor_(std::move(executor)),
-      connection_id_(connection_id), query_context_{connection_id, ""},
-      reader_(fd), writer_(fd) {}
+    : fd_(fd), executor_(std::move(executor)), connection_id_(connection_id),
+      query_context_{connection_id, ""}, reader_(fd), writer_(fd) {}
 
 void MysqlSession::Run() {
   std::clog << "MySQL session connection_id=" << connection_id_ << " started\n";

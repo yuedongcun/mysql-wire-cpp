@@ -1,6 +1,18 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file session_test.cpp
+ * @brief End-to-end socket tests for handshake, commands, and resultsets.
+ *
+ * @code{.text}
+ * test client <-> socketpair <-> MysqlSession thread <-> FakeSqlExecutor
+ * @endcode
+ *
+ * The harness speaks packets directly, keeping the protocol tests independent
+ * of an external mysql binary and real TCP networking.
+ */
+
 #include <sys/socket.h>
 #include <unistd.h>
 

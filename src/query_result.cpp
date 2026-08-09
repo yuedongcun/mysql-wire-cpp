@@ -2,6 +2,11 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file query_result.cpp
+ * @brief Implements factories for OK, row-producing, and error SQL results.
+ */
+
 #include "mysql_wire/query_result.h"
 
 #include <utility>

@@ -2,6 +2,15 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file sql_executor.cpp
+ * @brief Implements frontend query normalization and compatibility routing.
+ *
+ * Queries needed by common mysql CLI startup and metadata probes are answered
+ * here. Statements outside that deliberately small subset are delegated to
+ * the configured SqlExecutor.
+ */
+
 #include "mysql_wire/sql_executor.h"
 
 #include <algorithm>

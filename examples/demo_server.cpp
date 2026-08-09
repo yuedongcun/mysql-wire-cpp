@@ -1,6 +1,15 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
+/**
+ * @file demo_server.cpp
+ * @brief Standalone example wiring MysqlServer to a minimal in-memory executor.
+ *
+ * The demo is intentionally not a SQL engine; it provides two fixed SELECT
+ * results so the handshake, command loop, and result encoding can be exercised
+ * with an unmodified mysql client.
+ */
+
 #include <csignal>
 #include <cstdint>
 #include <iostream>
