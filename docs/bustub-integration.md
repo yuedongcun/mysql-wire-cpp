@@ -11,7 +11,7 @@ mysql CLI
   -> mysql_wire::MysqlSession
   -> mysql_wire::SqlExecutor
   -> BusTubSqlExecutor
-  -> BusTubInstance::ExecuteSql
+  -> BusTubInstance::ExecuteSqlStreaming
   -> BusTub ResultWriter callback
   -> mysql_wire::SqlResultSink
   -> MySQL text resultset
@@ -72,22 +72,34 @@ class BusTubSqlExecutor final : public mysql_wire::SqlExecutor {
 
 `Execute` 的职责只有三项：
 
-1. 调用 `BusTubInstance::ExecuteSql(sql, writer)`；
+1. 调用 `BusTubInstance::ExecuteSqlStreaming(sql, writer)`；
 2. 通过一个 `ResultWriter` 实现接收列名、每行 cell 和受影响行数；
 3. 把 `ResultWriter` 回调直接转发为 `BeginRows`、`WriteRow`、`EndRows`
    或 `WriteOk`。
 
-这里的“直接转发”删除了 adapter 中完整的字符串结果缓存，但没有改变 BusTub 核心的
-执行方式。BusTub 当前仍先把执行结果收集到 `vector<Tuple>`，随后才调用
-`ResultWriter`：
+BusTub 保留原来的物化路径，供 shell 和现有测试继续使用：
 
 ```text
-Executor::Next
-  -> vector<Tuple>（BusTub 完整结果）
+ExecuteSql
+  -> ExecutionEngine::Execute
+  -> vector<Tuple>
   -> ResultWriter
-  -> SqlResultSink（只保留当前行）
+```
+
+MySQL adapter 使用独立的 SELECT 流式路径：
+
+```text
+ExecuteSqlStreaming
+  -> ExecutionEngine::ExecuteStreaming
+  -> Tuple batch
+  -> ResultWriter（只保留当前行）
+  -> SqlResultSink
   -> MySQL packet
 ```
+
+非 SELECT 语句仍回退到原 `ExecuteSql`。DDL 和 DML 只产生小型 OK/affected-row
+结果，没有保存大型结果集的需要。若 sink 因客户端断开而拒绝一行，writer 会让根执行器
+停止继续 `Next()`。
 
 BusTub 当前的 `ResultWriter` 接口只暴露字符串形式的 header 和 cell，不传递 `Schema`、
 `TypeId` 或独立的 NULL 标记。因此当前 adapter 将结果列统一声明为 `VAR_STRING`，并按
@@ -128,11 +140,12 @@ BusTub 仓库只增加 adapter 集成测试：
 - 创建内存 `BusTubInstance`；
 - 通过 `BusTubSqlExecutor` 执行建表、插入和查询；
 - 使用测试 sink 校验 affected rows、列信息和逐行数据。
+- 让测试 sink 拒绝第一行，校验流式执行能够提前停止。
 
 最终再使用真实 MySQL 8.x CLI 验证：
 
 ```text
-TCP -> handshake -> COM_QUERY -> BusTub ExecuteSql -> text resultset
+TCP -> handshake -> COM_QUERY -> BusTub ExecuteSqlStreaming -> text resultset
 ```
 
 这样可以分别定位协议错误、适配错误和数据库执行错误，且公开协议仓库不需要包含 BusTub
