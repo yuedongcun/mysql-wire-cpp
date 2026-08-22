@@ -11,7 +11,7 @@
  * and COM_QUERY through ExecuteQuery and the result encoder.
  */
 
-#include "mysql_wire/session.h"
+#include "internal/session.h"
 
 #include <unistd.h>
 
@@ -24,8 +24,9 @@
 #include <utility>
 #include <vector>
 
-#include "mysql_wire/constants.h"
-#include "mysql_wire/result_encoder.h"
+#include "internal/constants.h"
+#include "internal/result_encoder.h"
+#include "internal/sql_dispatch.h"
 
 namespace mysql_wire {
 

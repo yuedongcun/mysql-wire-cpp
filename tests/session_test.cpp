@@ -27,10 +27,10 @@
 #include <utility>
 #include <vector>
 
-#include "mysql_wire/constants.h"
-#include "mysql_wire/packet.h"
-#include "mysql_wire/session.h"
-#include "mysql_wire/sql_executor.h"
+#include "internal/constants.h"
+#include "internal/packet.h"
+#include "internal/session.h"
+#include "mysql_wire/mysql_wire.h"
 
 namespace {
 

@@ -10,7 +10,6 @@
  * with an unmodified mysql client.
  */
 
-#include <csignal>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -21,9 +20,7 @@
 #include <utility>
 #include <vector>
 
-#include "mysql_wire/query_result.h"
-#include "mysql_wire/server.h"
-#include "mysql_wire/sql_executor.h"
+#include "mysql_wire/mysql_wire.h"
 
 namespace {
 
@@ -31,20 +28,33 @@ class DemoExecutor : public mysql_wire::SqlExecutor {
 public:
   auto Execute(const std::string &sql, const mysql_wire::MysqlQueryContext &)
       -> mysql_wire::SqlQueryResult override {
+
     if (sql == "SELECT 1" || sql == "select 1") {
-      std::vector<mysql_wire::SqlColumn> columns{
-          {"1", mysql_wire::ColumnType::LONGLONG, false}};
-      std::vector<std::vector<std::optional<std::string>>> rows{{"1"}};
+      mysql_wire::SqlColumn column{"1", mysql_wire::ColumnType::LONGLONG,
+                                   false};
+      std::vector<mysql_wire::SqlColumn> columns{column};
+
+      // Rows are indexed as rows[row_index][column_index]. A std::nullopt cell
+      // represents SQL NULL in the text protocol.
+      std::vector<std::optional<std::string>> row{"1"};
+      std::vector<std::vector<std::optional<std::string>>> rows{row};
+
       return mysql_wire::SqlQueryResult::Rows(std::move(columns),
                                               std::move(rows));
     }
+
     if (sql == "SELECT 'hello'" || sql == "select 'hello'") {
-      std::vector<mysql_wire::SqlColumn> columns{
-          {"hello", mysql_wire::ColumnType::VAR_STRING, false}};
-      std::vector<std::vector<std::optional<std::string>>> rows{{"hello"}};
+      mysql_wire::SqlColumn column{"hello", mysql_wire::ColumnType::VAR_STRING,
+                                   false};
+      std::vector<mysql_wire::SqlColumn> columns{column};
+
+      std::vector<std::optional<std::string>> row{"hello"};
+      std::vector<std::vector<std::optional<std::string>>> rows{row};
+
       return mysql_wire::SqlQueryResult::Rows(std::move(columns),
                                               std::move(rows));
     }
+
     return mysql_wire::SqlQueryResult::Error(
         "demo executor supports only SELECT 1 and SELECT 'hello'");
   }
@@ -83,7 +93,6 @@ auto main(int argc, char **argv) -> int {
     return 1;
   }
 
-  std::signal(SIGPIPE, SIG_IGN);
   auto executor = std::make_shared<DemoExecutor>();
   mysql_wire::MysqlServer server(std::move(host), port, std::move(executor));
   return server.ServeForever();

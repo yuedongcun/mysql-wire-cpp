@@ -12,7 +12,6 @@ add_library(
   mysql_wire
   STATIC
   src/packet.cpp
-  src/query_result.cpp
   src/result_encoder.cpp
   src/server.cpp
   src/session.cpp
@@ -24,7 +23,8 @@ target_include_directories(
   mysql_wire
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(mysql_wire PUBLIC Threads::Threads)
 
 if(MYSQL_WIRE_BUILD_EXAMPLES)
@@ -36,10 +36,12 @@ if(MYSQL_WIRE_BUILD_TESTS)
   enable_testing()
 
   add_executable(mysql_wire_packet_test tests/packet_test.cpp)
+  target_include_directories(mysql_wire_packet_test PRIVATE src)
   target_link_libraries(mysql_wire_packet_test PRIVATE mysql_wire)
   add_test(NAME mysql_wire_packet_test COMMAND mysql_wire_packet_test)
 
   add_executable(mysql_wire_session_test tests/session_test.cpp)
+  target_include_directories(mysql_wire_session_test PRIVATE src)
   target_link_libraries(mysql_wire_session_test PRIVATE mysql_wire)
   add_test(NAME mysql_wire_session_test COMMAND mysql_wire_session_test)
 endif()
@@ -48,7 +50,9 @@ install(
   TARGETS mysql_wire
   EXPORT mysql-wire-cpp-targets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(
+  FILES include/mysql_wire/mysql_wire.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/mysql_wire)
 install(
   EXPORT mysql-wire-cpp-targets
   FILE mysql-wire-cpp-targets.cmake

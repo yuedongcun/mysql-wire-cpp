@@ -4,14 +4,14 @@
 
 /**
  * @file sql_executor.cpp
- * @brief Implements frontend query normalization and compatibility routing.
+ * @brief Implements public result factories and compatibility query routing.
  *
  * Queries needed by common mysql CLI startup and metadata probes are answered
  * here. Statements outside that deliberately small subset are delegated to
  * the configured SqlExecutor.
  */
 
-#include "mysql_wire/sql_executor.h"
+#include "mysql_wire/mysql_wire.h"
 
 #include <algorithm>
 #include <cctype>
@@ -20,9 +20,37 @@
 #include <utility>
 #include <vector>
 
-#include "mysql_wire/constants.h"
+#include "internal/constants.h"
+#include "internal/sql_dispatch.h"
 
 namespace mysql_wire {
+
+auto SqlQueryResult::Ok(int64_t affected_rows, std::string message)
+    -> SqlQueryResult {
+  SqlQueryResult result;
+  result.kind_ = SqlResultKind::OK;
+  result.affected_rows_ = affected_rows;
+  result.message_ = std::move(message);
+  return result;
+}
+
+auto SqlQueryResult::Rows(
+    std::vector<SqlColumn> columns,
+    std::vector<std::vector<std::optional<std::string>>> rows)
+    -> SqlQueryResult {
+  SqlQueryResult result;
+  result.kind_ = SqlResultKind::ROWS;
+  result.columns_ = std::move(columns);
+  result.rows_ = std::move(rows);
+  return result;
+}
+
+auto SqlQueryResult::Error(std::string message) -> SqlQueryResult {
+  SqlQueryResult result;
+  result.kind_ = SqlResultKind::ERROR;
+  result.message_ = std::move(message);
+  return result;
+}
 
 namespace {
 

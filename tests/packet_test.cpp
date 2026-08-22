@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-#include "mysql_wire/packet.h"
+#include "internal/packet.h"
 
 namespace {
 

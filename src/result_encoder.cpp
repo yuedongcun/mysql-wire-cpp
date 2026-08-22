@@ -10,13 +10,13 @@
  * payload construction. Packet framing and socket I/O remain in packet.cpp.
  */
 
-#include "mysql_wire/result_encoder.h"
+#include "internal/result_encoder.h"
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "mysql_wire/constants.h"
+#include "internal/constants.h"
 
 namespace mysql_wire {
 

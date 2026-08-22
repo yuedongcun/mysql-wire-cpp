@@ -11,7 +11,7 @@
  * length-encoded forms used throughout the protocol.
  */
 
-#include "mysql_wire/packet.h"
+#include "internal/packet.h"
 
 #include <sys/socket.h>
 #include <unistd.h>

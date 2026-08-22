@@ -91,6 +91,8 @@ SELECT CONNECTION_ID();
 实现执行边界：
 
 ```cpp
+#include "mysql_wire/mysql_wire.h"
+
 class EngineExecutor final : public mysql_wire::SqlExecutor {
  public:
   auto Execute(const std::string &sql,
@@ -136,8 +138,9 @@ BusTub 的完整依赖边界、结果转换和测试方式见
 ## 目录结构
 
 ```text
-include/mysql_wire/  公开接口与协议类型
-src/                 packet、session、server 和结果编码实现
+include/mysql_wire/mysql_wire.h  唯一的公开 API
+src/internal/                     内部协议组件声明
+src/                              packet、session、server 和结果编码实现
 tests/               packet 与 socket session 测试
 examples/            可直接连接的 demo server
 docs/                协议范围与后端接入文档

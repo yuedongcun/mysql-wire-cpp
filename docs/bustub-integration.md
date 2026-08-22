@@ -53,6 +53,8 @@ mysql-wire-cpp::mysql_wire
 适配器继承公开接口，并持有 BusTub 实例的引用：
 
 ```cpp
+#include "mysql_wire/mysql_wire.h"
+
 class BusTubSqlExecutor final : public mysql_wire::SqlExecutor {
  public:
   explicit BusTubSqlExecutor(BusTubInstance &bustub) : bustub_(bustub) {}

@@ -10,7 +10,7 @@
  * to a detached thread running MysqlSession.
  */
 
-#include "mysql_wire/server.h"
+#include "mysql_wire/mysql_wire.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -24,7 +24,7 @@
 #include <thread>
 #include <utility>
 
-#include "mysql_wire/session.h"
+#include "internal/session.h"
 
 namespace mysql_wire {
 
