@@ -7,10 +7,10 @@
  * @brief Public API for embedding the MySQL Wire frontend into a SQL engine.
  *
  * An embedding application implements SqlExecutor, constructs MysqlServer,
- * and returns SqlQueryResult values from its SQL engine:
+ * and writes query results to the supplied SqlResultSink:
  *
  * @code{.text}
- * mysql client -> MysqlServer -> SqlExecutor -> SqlQueryResult -> client
+ * mysql client -> MysqlServer -> SqlExecutor -> SqlResultSink -> client
  * @endcode
  *
  * Packet framing, handshake processing, session state, and response encoding
@@ -46,9 +46,6 @@ struct MysqlQueryContext {
   std::string current_database_;
 };
 
-/** Result shape produced by the SQL execution layer. */
-enum class SqlResultKind { OK, ROWS, ERROR };
-
 /** Column metadata used when encoding a MySQL text resultset. */
 struct SqlColumn {
   /** Display name returned to the client. */
@@ -59,28 +56,45 @@ struct SqlColumn {
   bool nullable_{true};
 };
 
-/** SQL-engine-neutral result model consumed by the MySQL frontend. */
-struct SqlQueryResult {
-  /** Whether this result should be encoded as OK, result rows, or ERR. */
-  SqlResultKind kind_{SqlResultKind::OK};
-  /** Column metadata for ROWS results. */
-  std::vector<SqlColumn> columns_;
-  /** ROWS values; std::nullopt is encoded as SQL NULL. */
-  std::vector<std::vector<std::optional<std::string>>> rows_;
-  /** Number of rows affected for OK results. */
-  int64_t affected_rows_{0};
-  /** OK or ERR message text. */
-  std::string message_;
+/** One text-protocol cell; std::nullopt represents SQL NULL. */
+using SqlCell = std::optional<std::string>;
 
-  /** @return an OK result with optional affected-row count and message */
-  static auto Ok(int64_t affected_rows = 0, std::string message = {})
-      -> SqlQueryResult;
-  /** @return a ROWS result with the given columns and rows */
-  static auto Rows(std::vector<SqlColumn> columns,
-                   std::vector<std::vector<std::optional<std::string>>> rows)
-      -> SqlQueryResult;
-  /** @return an ERROR result with the given message */
-  static auto Error(std::string message) -> SqlQueryResult;
+/** One text-protocol row in the same order as its column metadata. */
+using SqlRow = std::vector<SqlCell>;
+
+/**
+ * Receives one SQL response and writes it to the connected MySQL client.
+ *
+ * An executor produces exactly one of these response shapes:
+ *
+ * @code{.text}
+ * WriteOk(...)
+ * WriteError(...)
+ * BeginRows(columns) -> WriteRow(row) ... -> EndRows()
+ * @endcode
+ *
+ * Methods consume their arguments before returning. A false return value means
+ * the response could not be written, usually because the client disconnected.
+ */
+class SqlResultSink {
+public:
+  virtual ~SqlResultSink() = default;
+
+  /** Write an OK response for a statement that does not return rows. */
+  virtual auto WriteOk(uint64_t affected_rows = 0,
+                       const std::string &message = {}) -> bool = 0;
+
+  /** Write an ERR response. */
+  virtual auto WriteError(const std::string &message) -> bool = 0;
+
+  /** Start a text resultset and write its column metadata. */
+  virtual auto BeginRows(const std::vector<SqlColumn> &columns) -> bool = 0;
+
+  /** Write one text resultset row. */
+  virtual auto WriteRow(const SqlRow &row) -> bool = 0;
+
+  /** Finish the current text resultset. */
+  virtual auto EndRows() -> bool = 0;
 };
 
 /** SQL execution boundary implemented by the embedding engine. */
@@ -88,9 +102,9 @@ class SqlExecutor {
 public:
   virtual ~SqlExecutor() = default;
 
-  /** Execute SQL and return a result that can be encoded by the frontend. */
-  virtual auto Execute(const std::string &sql, const MysqlQueryContext &context)
-      -> SqlQueryResult = 0;
+  /** Execute SQL and write exactly one response through sink. */
+  virtual auto Execute(const std::string &sql, const MysqlQueryContext &context,
+                       SqlResultSink &sink) -> bool = 0;
 
   /** @return the single logical database exposed by this executor */
   virtual auto DatabaseName() const -> std::string_view = 0;

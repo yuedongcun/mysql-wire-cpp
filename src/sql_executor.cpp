@@ -4,7 +4,7 @@
 
 /**
  * @file sql_executor.cpp
- * @brief Implements public result factories and compatibility query routing.
+ * @brief Routes mysql CLI compatibility queries into the result sink.
  *
  * Queries needed by common mysql CLI startup and metadata probes are answered
  * here. Statements outside that deliberately small subset are delegated to
@@ -24,33 +24,6 @@
 #include "internal/sql_dispatch.h"
 
 namespace mysql_wire {
-
-auto SqlQueryResult::Ok(int64_t affected_rows, std::string message)
-    -> SqlQueryResult {
-  SqlQueryResult result;
-  result.kind_ = SqlResultKind::OK;
-  result.affected_rows_ = affected_rows;
-  result.message_ = std::move(message);
-  return result;
-}
-
-auto SqlQueryResult::Rows(
-    std::vector<SqlColumn> columns,
-    std::vector<std::vector<std::optional<std::string>>> rows)
-    -> SqlQueryResult {
-  SqlQueryResult result;
-  result.kind_ = SqlResultKind::ROWS;
-  result.columns_ = std::move(columns);
-  result.rows_ = std::move(rows);
-  return result;
-}
-
-auto SqlQueryResult::Error(std::string message) -> SqlQueryResult {
-  SqlQueryResult result;
-  result.kind_ = SqlResultKind::ERROR;
-  result.message_ = std::move(message);
-  return result;
-}
 
 namespace {
 
@@ -97,55 +70,54 @@ auto NormalizeSql(const std::string &sql) -> std::string {
   return collapsed;
 }
 
-auto OneStringRow(std::string column, std::optional<std::string> value)
-    -> SqlQueryResult {
-  std::vector<SqlColumn> columns{
-      SqlColumn{std::move(column), ColumnType::VAR_STRING, true}};
-  std::vector<std::vector<std::optional<std::string>>> rows{{std::move(value)}};
-  return SqlQueryResult::Rows(std::move(columns), std::move(rows));
+auto WriteOneStringRow(SqlResultSink &sink, const std::string &column,
+                       std::optional<std::string> value) -> bool {
+  const std::vector<SqlColumn> columns{
+      SqlColumn{column, ColumnType::VAR_STRING, true}};
+  const SqlRow row{std::move(value)};
+  return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
 }
 
 auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
-                         MysqlQueryContext *context)
-    -> std::optional<SqlQueryResult> {
+                         MysqlQueryContext *context, SqlResultSink &sink)
+    -> std::optional<bool> {
   const auto normalized = NormalizeSql(sql);
   if (normalized.empty()) {
-    return SqlQueryResult::Ok();
+    return sink.WriteOk();
   }
   // The mysql CLI sends setup and metadata probes before user queries. Handle
   // the small compatibility subset here instead of routing it to the backend.
   if (HasPrefix(normalized, "set ")) {
-    return SqlQueryResult::Ok();
+    return sink.WriteOk();
   }
   if (HasPrefix(normalized, "use ")) {
     const auto database = normalized.substr(4);
     if (!SelectDatabase(executor, context, database)) {
-      return SqlQueryResult::Error("unknown database: " + database);
+      return sink.WriteError("unknown database: " + database);
     }
-    return SqlQueryResult::Ok();
+    return sink.WriteOk();
   }
   if (normalized == "select database()" || normalized == "select schema()") {
     if (context->current_database_.empty()) {
-      return OneStringRow("database()", std::nullopt);
+      return WriteOneStringRow(sink, "database()", std::nullopt);
     }
-    return OneStringRow("database()", context->current_database_);
+    return WriteOneStringRow(sink, "database()", context->current_database_);
   }
   if (HasPrefix(normalized, "select @@version_comment")) {
-    return OneStringRow("@@version_comment", MYSQL_VERSION_COMMENT);
+    return WriteOneStringRow(sink, "@@version_comment", MYSQL_VERSION_COMMENT);
   }
   if (HasPrefix(normalized, "select @@version")) {
-    return OneStringRow("@@version", MYSQL_SERVER_VERSION);
+    return WriteOneStringRow(sink, "@@version", MYSQL_SERVER_VERSION);
   }
   if (HasPrefix(normalized, "select connection_id()")) {
-    return OneStringRow("connection_id()",
-                        std::to_string(context->connection_id_));
+    return WriteOneStringRow(sink, "connection_id()",
+                             std::to_string(context->connection_id_));
   }
   if (normalized == "show databases") {
-    std::vector<SqlColumn> columns{
+    const std::vector<SqlColumn> columns{
         SqlColumn{"Database", ColumnType::VAR_STRING, false}};
-    std::vector<std::vector<std::optional<std::string>>> rows{
-        {std::string(executor.DatabaseName())}};
-    return SqlQueryResult::Rows(std::move(columns), std::move(rows));
+    const SqlRow row{std::string(executor.DatabaseName())};
+    return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
   }
   return std::nullopt;
 }
@@ -167,12 +139,12 @@ auto SelectDatabase(const SqlExecutor &executor, MysqlQueryContext *context,
 }
 
 auto ExecuteQuery(SqlExecutor &executor, const std::string &sql,
-                  MysqlQueryContext *context) -> SqlQueryResult {
-  if (auto frontend_result = HandleFrontendQuery(executor, sql, context);
+                  MysqlQueryContext *context, SqlResultSink &sink) -> bool {
+  if (auto frontend_result = HandleFrontendQuery(executor, sql, context, sink);
       frontend_result.has_value()) {
     return frontend_result.value();
   }
-  return executor.Execute(TrimSql(sql), *context);
+  return executor.Execute(TrimSql(sql), *context, sink);
 }
 
 } // namespace mysql_wire

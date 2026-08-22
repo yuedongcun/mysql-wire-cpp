@@ -131,49 +131,55 @@ auto MakeEofPayload() -> std::vector<uint8_t> {
  *   0..N x ProtocolText::ResultsetRow
  *   EOF_Packet
  */
-auto WriteQueryResult(PacketWriter *writer, const SqlQueryResult &result,
-                      uint8_t *sequence_id) -> bool {
-  if (result.kind_ == SqlResultKind::ERROR) {
-    return writer->WritePacket(
-        NextSequence(sequence_id),
-        MakeErrPayload(MYSQL_ERR_UNKNOWN, result.message_));
-  }
-  if (result.kind_ == SqlResultKind::OK) {
-    return writer->WritePacket(
-        NextSequence(sequence_id),
-        MakeOkPayload(static_cast<uint64_t>(result.affected_rows_),
-                      result.message_));
-  }
+auto MysqlResultSink::WriteOk(uint64_t affected_rows,
+                              const std::string &message) -> bool {
+  const bool written = writer_->WritePacket(
+      NextSequence(sequence_id_), MakeOkPayload(affected_rows, message));
+  response_started_ = response_started_ || written;
+  return written;
+}
 
+auto MysqlResultSink::WriteError(const std::string &message) -> bool {
+  const bool written = writer_->WritePacket(
+      NextSequence(sequence_id_), MakeErrPayload(MYSQL_ERR_UNKNOWN, message));
+  response_started_ = response_started_ || written;
+  return written;
+}
+
+auto MysqlResultSink::BeginRows(const std::vector<SqlColumn> &columns) -> bool {
   std::vector<uint8_t> column_count;
-  AppendLenEncodedInteger(&column_count,
-                          result.columns_.size()); // column_count
-  if (!writer->WritePacket(NextSequence(sequence_id), column_count)) {
+  AppendLenEncodedInteger(&column_count, columns.size()); // column_count
+  if (!writer_->WritePacket(NextSequence(sequence_id_), column_count)) {
     return false;
   }
+  response_started_ = true;
 
-  for (const auto &column : result.columns_) {
+  for (const auto &column : columns) {
     // Column Definition packet.
-    if (!writer->WritePacket(NextSequence(sequence_id),
-                             MakeColumnDefinitionPayload(column))) {
+    if (!writer_->WritePacket(NextSequence(sequence_id_),
+                              MakeColumnDefinitionPayload(column))) {
       return false;
     }
   }
 
   // EOF packet marking the end of column metadata.
-  if (!writer->WritePacket(NextSequence(sequence_id), MakeEofPayload())) {
+  return writer_->WritePacket(NextSequence(sequence_id_), MakeEofPayload());
+}
+
+auto MysqlResultSink::WriteRow(const SqlRow &row) -> bool {
+  if (!writer_->WritePacket(NextSequence(sequence_id_), MakeRowPayload(row))) {
     return false;
   }
+  response_started_ = true;
+  return true;
+}
 
-  for (const auto &row : result.rows_) {
-    // Text Resultset Row packet.
-    if (!writer->WritePacket(NextSequence(sequence_id), MakeRowPayload(row))) {
-      return false;
-    }
-  }
-
+auto MysqlResultSink::EndRows() -> bool {
   // EOF packet marking the end of the resultset.
-  return writer->WritePacket(NextSequence(sequence_id), MakeEofPayload());
+  const bool written =
+      writer_->WritePacket(NextSequence(sequence_id_), MakeEofPayload());
+  response_started_ = response_started_ || written;
+  return written;
 }
 
 } // namespace mysql_wire

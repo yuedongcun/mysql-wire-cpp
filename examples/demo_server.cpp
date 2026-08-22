@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -26,21 +25,18 @@ namespace {
 
 class DemoExecutor : public mysql_wire::SqlExecutor {
 public:
-  auto Execute(const std::string &sql, const mysql_wire::MysqlQueryContext &)
-      -> mysql_wire::SqlQueryResult override {
-
+  auto Execute(const std::string &sql, const mysql_wire::MysqlQueryContext &,
+               mysql_wire::SqlResultSink &sink) -> bool override {
     if (sql == "SELECT 1" || sql == "select 1") {
       mysql_wire::SqlColumn column{"1", mysql_wire::ColumnType::LONGLONG,
                                    false};
       std::vector<mysql_wire::SqlColumn> columns{column};
 
-      // Rows are indexed as rows[row_index][column_index]. A std::nullopt cell
-      // represents SQL NULL in the text protocol.
-      std::vector<std::optional<std::string>> row{"1"};
-      std::vector<std::vector<std::optional<std::string>>> rows{row};
+      // Cells follow the same order as columns. A std::nullopt cell represents
+      // SQL NULL in the text protocol.
+      mysql_wire::SqlRow row{"1"};
 
-      return mysql_wire::SqlQueryResult::Rows(std::move(columns),
-                                              std::move(rows));
+      return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
     }
 
     if (sql == "SELECT 'hello'" || sql == "select 'hello'") {
@@ -48,14 +44,12 @@ public:
                                    false};
       std::vector<mysql_wire::SqlColumn> columns{column};
 
-      std::vector<std::optional<std::string>> row{"hello"};
-      std::vector<std::vector<std::optional<std::string>>> rows{row};
+      mysql_wire::SqlRow row{"hello"};
 
-      return mysql_wire::SqlQueryResult::Rows(std::move(columns),
-                                              std::move(rows));
+      return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
     }
 
-    return mysql_wire::SqlQueryResult::Error(
+    return sink.WriteError(
         "demo executor supports only SELECT 1 and SELECT 'hello'");
   }
 

@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -43,15 +42,16 @@ void Require(bool condition, const std::string &message) {
 class FakeSqlExecutor : public mysql_wire::SqlExecutor {
 public:
   auto Execute(const std::string &sql,
-               const mysql_wire::MysqlQueryContext &context)
-      -> mysql_wire::SqlQueryResult override {
+               const mysql_wire::MysqlQueryContext &context,
+               mysql_wire::SqlResultSink &sink) -> bool override {
     last_sql_ = sql;
     last_context_ = context;
-    std::vector<mysql_wire::SqlColumn> columns{
+    const std::vector<mysql_wire::SqlColumn> columns{
         {"value", mysql_wire::ColumnType::VAR_STRING, false}};
-    std::vector<std::vector<std::optional<std::string>>> rows{{"fake-result"}};
-    return mysql_wire::SqlQueryResult::Rows(std::move(columns),
-                                            std::move(rows));
+    const mysql_wire::SqlRow first_row{"first-result"};
+    const mysql_wire::SqlRow second_row{"second-result"};
+    return sink.BeginRows(columns) && sink.WriteRow(first_row) &&
+           sink.WriteRow(second_row) && sink.EndRows();
   }
 
   auto DatabaseName() const -> std::string_view override { return "testdb"; }
@@ -155,24 +155,31 @@ auto MakeCommand(mysql_wire::Command command, const std::string &body = {})
   return payload;
 }
 
-auto ReadSingleColumnRow(mysql_wire::PacketReader *reader) -> std::string {
+auto ReadSingleColumnRows(mysql_wire::PacketReader *reader, size_t row_count)
+    -> std::vector<std::string> {
   auto column_count = reader->ReadPacket();
   auto column_definition = reader->ReadPacket();
   auto metadata_eof = reader->ReadPacket();
-  auto row = reader->ReadPacket();
-  auto resultset_eof = reader->ReadPacket();
   Require(column_count.has_value() &&
               column_count->payload_ == std::vector<uint8_t>({1}),
           "column count mismatch");
   Require(column_definition.has_value(), "missing column definition");
   Require(metadata_eof.has_value() && metadata_eof->payload_[0] == 0xfe,
           "missing metadata EOF");
-  Require(row.has_value() && !row->payload_.empty(), "missing result row");
+
+  std::vector<std::string> values;
+  for (size_t i = 0; i < row_count; i++) {
+    auto row = reader->ReadPacket();
+    Require(row.has_value() && !row->payload_.empty(), "missing result row");
+    Require(row->payload_[0] == row->payload_.size() - 1,
+            "unexpected row encoding");
+    values.emplace_back(row->payload_.begin() + 1, row->payload_.end());
+  }
+
+  auto resultset_eof = reader->ReadPacket();
   Require(resultset_eof.has_value() && resultset_eof->payload_[0] == 0xfe,
           "missing resultset EOF");
-  Require(row->payload_[0] == row->payload_.size() - 1,
-          "unexpected row encoding");
-  return {row->payload_.begin() + 1, row->payload_.end()};
+  return values;
 }
 
 void TestSessionUsesInjectedExecutor() {
@@ -189,7 +196,9 @@ void TestSessionUsesInjectedExecutor() {
   mysql_wire::AppendBytes(&query, "  SELECT delegated;  ");
   Require(writer.WritePacket(0, query), "query write failed");
 
-  Require(ReadSingleColumnRow(&reader) == "fake-result", "row mismatch");
+  const auto rows = ReadSingleColumnRows(&reader, 2);
+  Require(rows == std::vector<std::string>({"first-result", "second-result"}),
+          "rows mismatch");
 
   const std::vector<uint8_t> quit{
       static_cast<uint8_t>(mysql_wire::Command::QUIT)};
@@ -237,7 +246,7 @@ void TestSessionHandlesControlAndCompatibilityCommands() {
   Require(writer.WritePacket(
               0, MakeCommand(mysql_wire::Command::QUERY, "SELECT DATABASE()")),
           "compatibility query write failed");
-  Require(ReadSingleColumnRow(&reader) == "testdb",
+  Require(ReadSingleColumnRows(&reader, 1)[0] == "testdb",
           "selected database result mismatch");
   Require(executor->last_sql_.empty(),
           "compatibility query should not reach the executor");

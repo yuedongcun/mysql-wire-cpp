@@ -16,6 +16,6 @@ namespace mysql_wire {
 auto SelectDatabase(const SqlExecutor &executor, MysqlQueryContext *context,
                     const std::string &database) -> bool;
 auto ExecuteQuery(SqlExecutor &executor, const std::string &sql,
-                  MysqlQueryContext *context) -> SqlQueryResult;
+                  MysqlQueryContext *context, SqlResultSink &sink) -> bool;
 
 } // namespace mysql_wire

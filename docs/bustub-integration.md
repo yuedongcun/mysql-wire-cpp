@@ -13,7 +13,7 @@ mysql CLI
   -> BusTubSqlExecutor
   -> BusTubInstance::ExecuteSql
   -> BusTub ResultWriter callback
-  -> mysql_wire::SqlQueryResult
+  -> mysql_wire::SqlResultSink
   -> MySQL text resultset
 ```
 
@@ -60,8 +60,8 @@ class BusTubSqlExecutor final : public mysql_wire::SqlExecutor {
   explicit BusTubSqlExecutor(BusTubInstance &bustub) : bustub_(bustub) {}
 
   auto Execute(const std::string &sql,
-               const mysql_wire::MysqlQueryContext &context)
-      -> mysql_wire::SqlQueryResult override;
+               const mysql_wire::MysqlQueryContext &context,
+               mysql_wire::SqlResultSink &sink) -> bool override;
 
   auto DatabaseName() const -> std::string_view override;
 
@@ -73,14 +73,27 @@ class BusTubSqlExecutor final : public mysql_wire::SqlExecutor {
 `Execute` 的职责只有三项：
 
 1. 调用 `BusTubInstance::ExecuteSql(sql, writer)`；
-2. 通过一个 `ResultWriter` 实现捕获列名、每行 cell 和受影响行数；
-3. 转换为 `SqlQueryResult::Ok`、`Rows` 或 `Error`。
+2. 通过一个 `ResultWriter` 实现接收列名、每行 cell 和受影响行数；
+3. 把 `ResultWriter` 回调直接转发为 `BeginRows`、`WriteRow`、`EndRows`
+   或 `WriteOk`。
+
+这里的“直接转发”删除了 adapter 中完整的字符串结果缓存，但没有改变 BusTub 核心的
+执行方式。BusTub 当前仍先把执行结果收集到 `vector<Tuple>`，随后才调用
+`ResultWriter`：
+
+```text
+Executor::Next
+  -> vector<Tuple>（BusTub 完整结果）
+  -> ResultWriter
+  -> SqlResultSink（只保留当前行）
+  -> MySQL packet
+```
 
 BusTub 当前的 `ResultWriter` 接口只暴露字符串形式的 header 和 cell，不传递 `Schema`、
 `TypeId` 或独立的 NULL 标记。因此当前 adapter 将结果列统一声明为 `VAR_STRING`，并按
-文本发送 cell；`SqlQueryResult` 本身支持 `std::nullopt`，但这个 adapter 暂时无法从现有
-回调中可靠恢复 SQL NULL。若后续给 BusTub 增加带类型的结果输出接口，类型映射和 NULL
-保真仍应在 adapter 中完成，协议库不需要依赖 BusTub 的 `Value` 或 `TypeId`。
+文本发送 cell；`SqlResultSink` 使用 `std::nullopt` 表示 SQL NULL，但这个 adapter 暂时
+无法从现有回调中可靠恢复 NULL。若后续给 BusTub 增加带类型的结果输出接口，类型映射和
+NULL 保真仍应在 adapter 中完成，协议库不需要依赖 BusTub 的 `Value` 或 `TypeId`。
 
 ## 3. 链接 adapter
 
@@ -114,7 +127,7 @@ BusTub 仓库只增加 adapter 集成测试：
 
 - 创建内存 `BusTubInstance`；
 - 通过 `BusTubSqlExecutor` 执行建表、插入和查询；
-- 校验 `affected_rows`、列信息和行数据已转换为 `SqlQueryResult`。
+- 使用测试 sink 校验 affected rows、列信息和逐行数据。
 
 最终再使用真实 MySQL 8.x CLI 验证：
 

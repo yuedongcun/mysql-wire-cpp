@@ -13,18 +13,18 @@ engine。它最初从 BusTub 的 MySQL 接入代码中拆出，目前协议核�
 mysql CLI
   -> TCP / MySQL packet
   -> HandshakeV10 和 session command loop
-  -> SqlExecutor::Execute(sql, context)
-  -> SqlQueryResult
+  -> SqlExecutor::Execute(sql, context, sink)
+  -> SqlResultSink
   -> OK / ERR / text resultset packet
 ```
 
 协议层与数据库内核通过两个类型解耦：
 
 - `SqlExecutor`：后端实现的 SQL 执行接口；
-- `SqlQueryResult`：协议编码器消费的中间结果，包括列信息、行数据、影响行数和错误信息。
+- `SqlResultSink`：后端逐行写入 OK、ERR 或文本结果集的输出接口。
 
-因此，packet 编解码、连接状态和 MySQL 兼容查询可以独立测试，数据库项目只保留一层
-结果转换适配器。
+`SqlResultSink` 收到一行就编码并发送一行，不在协议层保存完整结果集。后端是否在调用
+sink 前物化结果由后端决定；例如 BusTub 当前仍会先收集完整的 `vector<Tuple>`。
 
 ## 已实现范围
 
@@ -96,12 +96,27 @@ SELECT CONNECTION_ID();
 class EngineExecutor final : public mysql_wire::SqlExecutor {
  public:
   auto Execute(const std::string &sql,
-               const mysql_wire::MysqlQueryContext &context)
-      -> mysql_wire::SqlQueryResult override;
+               const mysql_wire::MysqlQueryContext &context,
+               mysql_wire::SqlResultSink &sink) -> bool override;
 
   auto DatabaseName() const -> std::string_view override;
 };
 ```
+
+行结果按固定顺序写入 sink：
+
+```cpp
+std::vector<mysql_wire::SqlColumn> columns{
+    {"name", mysql_wire::ColumnType::VAR_STRING, false}};
+mysql_wire::SqlRow row{"alice"};
+
+return sink.BeginRows(columns) &&
+       sink.WriteRow(row) &&
+       sink.EndRows();
+```
+
+不返回行的语句使用 `sink.WriteOk(affected_rows)`，SQL 错误使用
+`sink.WriteError(message)`。任何方法返回 `false` 都表示无法继续向客户端写响应。
 
 然后组装 executor 与 server：
 
@@ -130,6 +145,7 @@ BusTub 的完整依赖边界、结果转换和测试方式见
 - 不支持大于等于 16 MiB payload 的 packet 分片；
 - 不支持 query attributes、optional metadata 和 deprecated EOF；
 - 每个 executor 只暴露一个逻辑 database；
+- 协议层逐行发送，但不保证后端执行引擎本身端到端流式执行；
 - 当前网络模型为每连接一个 detached 工作线程，不提供优雅停机接口。
 
 该实现用于协议学习、原型验证和受控环境中的数据库前端接入，不应直接暴露到不可信

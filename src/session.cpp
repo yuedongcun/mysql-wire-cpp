@@ -179,19 +179,6 @@ auto CommandName(Command command) -> const char * {
   }
 }
 
-auto ResultKindName(SqlResultKind kind) -> const char * {
-  switch (kind) {
-  case SqlResultKind::OK:
-    return "OK";
-  case SqlResultKind::ROWS:
-    return "ROWS";
-  case SqlResultKind::ERROR:
-    return "ERROR";
-  default:
-    return "UNKNOWN";
-  }
-}
-
 } // namespace
 
 MysqlSession::MysqlSession(int fd, std::shared_ptr<SqlExecutor> executor,
@@ -358,17 +345,18 @@ auto MysqlSession::HandleCommand(const MysqlPacket &packet) -> bool {
     std::string sql(packet.payload_.begin() + 1, packet.payload_.end());
     std::clog << "MySQL session connection_id=" << connection_id_
               << " executing SQL: " << sql << '\n';
+    MysqlResultSink sink(&writer_, &sequence_id);
     try {
-      auto result = ExecuteQuery(*executor_, sql, &query_context_);
+      const bool written = ExecuteQuery(*executor_, sql, &query_context_, sink);
       std::clog << "MySQL session connection_id=" << connection_id_
-                << " SQL result kind=" << ResultKindName(result.kind_)
-                << " rows=" << result.rows_.size()
-                << " columns=" << result.columns_.size()
-                << " affected_rows=" << result.affected_rows_ << '\n';
-      return WriteQueryResult(&writer_, result, &sequence_id);
+                << " finished SQL response\n";
+      return written;
     } catch (const std::exception &ex) {
       std::clog << "MySQL session connection_id=" << connection_id_
                 << " SQL execution failed: " << ex.what() << '\n';
+      if (sink.ResponseStarted()) {
+        return false;
+      }
       return SendError(sequence_id, MYSQL_ERR_UNKNOWN, ex.what());
     }
   }
