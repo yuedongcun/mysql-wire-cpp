@@ -20,6 +20,7 @@ auto MakeOkPayload(uint64_t affected_rows, const std::string &message)
 auto MakeErrPayload(uint16_t error_code, const std::string &message)
     -> std::vector<uint8_t>;
 auto MakeEofPayload() -> std::vector<uint8_t>;
+
 /** SqlResultSink implementation that writes MySQL packets to one session. */
 class MysqlResultSink final : public SqlResultSink {
 public:

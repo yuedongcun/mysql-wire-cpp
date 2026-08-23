@@ -20,6 +20,7 @@ constexpr uint32_t CLIENT_SECURE_CONNECTION = 1U << 15U;
 constexpr uint32_t CLIENT_PLUGIN_AUTH = 1U << 19U;
 
 constexpr uint16_t SERVER_STATUS_AUTOCOMMIT = 1U << 1U;
+
 constexpr uint32_t SERVER_CAPABILITIES =
     CLIENT_LONG_PASSWORD | CLIENT_LONG_FLAG | CLIENT_CONNECT_WITH_DB |
     CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION |
@@ -35,7 +36,24 @@ constexpr uint16_t MYSQL_ERR_HANDSHAKE = 1043;
 constexpr uint16_t MYSQL_ERR_BAD_DB = 1049;
 constexpr uint16_t MYSQL_ERR_UNKNOWN = 1105;
 
-/** MySQL command ids handled by the session command loop. */
+/**
+ * MySQL command ids handled by the session command loop.
+ *
+ * Command Phase:
+ * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_command_phase.html
+ *
+ * COM_QUIT:
+ * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_quit.html
+ *
+ * COM_INIT_DB:
+ * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_init_db.html
+ *
+ * COM_QUERY:
+ * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_query.html
+ *
+ * COM_PING:
+ * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_ping.html
+ */
 enum class Command : uint8_t {
   QUIT = 0x01,
   INIT_DB = 0x02,

@@ -85,11 +85,13 @@ auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
   if (normalized.empty()) {
     return sink.WriteOk();
   }
+
   // The mysql CLI sends setup and metadata probes before user queries. Handle
   // the small compatibility subset here instead of routing it to the backend.
   if (HasPrefix(normalized, "set ")) {
     return sink.WriteOk();
   }
+
   if (HasPrefix(normalized, "use ")) {
     const auto database = normalized.substr(4);
     if (!SelectDatabase(executor, context, database)) {
@@ -97,28 +99,34 @@ auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
     }
     return sink.WriteOk();
   }
+
   if (normalized == "select database()" || normalized == "select schema()") {
     if (context->current_database_.empty()) {
       return WriteOneStringRow(sink, "database()", std::nullopt);
     }
     return WriteOneStringRow(sink, "database()", context->current_database_);
   }
+
   if (HasPrefix(normalized, "select @@version_comment")) {
     return WriteOneStringRow(sink, "@@version_comment", MYSQL_VERSION_COMMENT);
   }
+
   if (HasPrefix(normalized, "select @@version")) {
     return WriteOneStringRow(sink, "@@version", MYSQL_SERVER_VERSION);
   }
+
   if (HasPrefix(normalized, "select connection_id()")) {
     return WriteOneStringRow(sink, "connection_id()",
                              std::to_string(context->connection_id_));
   }
+
   if (normalized == "show databases") {
     const std::vector<SqlColumn> columns{
         SqlColumn{"Database", ColumnType::VAR_STRING, false}};
     const SqlRow row{std::string(executor.DatabaseName())};
     return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
   }
+
   return std::nullopt;
 }
 

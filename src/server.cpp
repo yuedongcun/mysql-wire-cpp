@@ -96,8 +96,7 @@ auto MysqlServer::ServeForever() -> int {
               << " from " << (client_ip == nullptr ? "<unknown>" : client_ip)
               << ':' << client_port << " fd=" << client_fd << '\n';
 
-    auto executor = executor_;
-    std::thread([client_fd, executor = std::move(executor), connection_id] {
+    std::thread([client_fd, executor = executor_, connection_id] {
       MysqlSession session(client_fd, executor, connection_id);
       session.Run();
     }).detach();

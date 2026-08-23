@@ -18,7 +18,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <iomanip>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -119,16 +118,20 @@ auto ParseHandshakeResponse41(const std::vector<uint8_t> &payload,
     *error = "malformed HandshakeResponse41 fixed fields";
     return false;
   }
+
   if ((response->capabilities_ & CLIENT_PROTOCOL_41) == 0) {
     *error = "client does not support CLIENT_PROTOCOL_41";
     return false;
   }
+
   if ((response->capabilities_ & CLIENT_SSL) != 0) {
     *error = "SSL is not supported by this frontend";
     return false;
   }
+
   const auto negotiated_capabilities =
       response->capabilities_ & SERVER_CAPABILITIES;
+
   if (!cursor.ReadNullTerminatedString(&response->username_)) {
     *error = "malformed username in HandshakeResponse41";
     return false;
@@ -156,6 +159,7 @@ auto ParseHandshakeResponse41(const std::vector<uint8_t> &payload,
     *error = "malformed database in HandshakeResponse41";
     return false;
   }
+
   if ((negotiated_capabilities & CLIENT_PLUGIN_AUTH) != 0 &&
       !cursor.ReadNullTerminatedString(&response->auth_plugin_name_)) {
     *error = "malformed authentication plugin in HandshakeResponse41";
@@ -243,6 +247,7 @@ auto MysqlSession::DoHandshake() -> bool {
     SendError(sequence_id, MYSQL_ERR_HANDSHAKE, parse_error);
     return false;
   }
+
   if (!handshake_response.database_.empty() &&
       !SelectDatabase(*executor_, &query_context_,
                       handshake_response.database_)) {
@@ -258,6 +263,7 @@ auto MysqlSession::DoHandshake() -> bool {
   auth_plugin_name_ = handshake_response.auth_plugin_name_.empty()
                           ? MYSQL_AUTH_PLUGIN_NAME
                           : std::move(handshake_response.auth_plugin_name_);
+
   std::clog << "MySQL session connection_id=" << connection_id_
             << " user=" << username_ << " database="
             << (query_context_.current_database_.empty()
@@ -271,6 +277,7 @@ auto MysqlSession::DoHandshake() -> bool {
   std::clog << "MySQL session connection_id=" << connection_id_
             << " sending auth OK seq=" << static_cast<uint32_t>(sequence_id)
             << '\n';
+
   return writer_.WritePacket(sequence_id, MakeOkPayload(0, ""));
 }
 
@@ -321,15 +328,18 @@ auto MysqlSession::HandleCommand(const MysqlPacket &packet) -> bool {
             << CommandName(command)
             << " seq=" << static_cast<uint32_t>(packet.sequence_id_)
             << " payload_len=" << packet.payload_.size() << '\n';
+
   switch (command) {
   case Command::QUIT:
     std::clog << "MySQL session connection_id=" << connection_id_
               << " received COM_QUIT\n";
     return false;
+
   case Command::PING:
     std::clog << "MySQL session connection_id=" << connection_id_
               << " replying OK to " << CommandName(command) << '\n';
     return writer_.WritePacket(sequence_id, MakeOkPayload(0, ""));
+
   case Command::INIT_DB: {
     const std::string database(packet.payload_.begin() + 1,
                                packet.payload_.end());
@@ -341,6 +351,7 @@ auto MysqlSession::HandleCommand(const MysqlPacket &packet) -> bool {
               << " replying OK to " << CommandName(command) << '\n';
     return writer_.WritePacket(sequence_id, MakeOkPayload(0, ""));
   }
+
   case Command::QUERY: {
     std::string sql(packet.payload_.begin() + 1, packet.payload_.end());
     std::clog << "MySQL session connection_id=" << connection_id_
@@ -360,6 +371,7 @@ auto MysqlSession::HandleCommand(const MysqlPacket &packet) -> bool {
       return SendError(sequence_id, MYSQL_ERR_UNKNOWN, ex.what());
     }
   }
+
   default:
     std::clog << "MySQL session connection_id=" << connection_id_
               << " unsupported command=0x" << std::hex
