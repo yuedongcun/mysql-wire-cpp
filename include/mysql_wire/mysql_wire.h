@@ -68,11 +68,14 @@ using SqlRow = std::vector<SqlCell>;
  * WriteOk(...)
  * WriteError(...)
  * BeginRows(columns) -> WriteRow(row) ... -> EndRows()
+ *                                      \-> WriteError(...)
  * @endcode
  *
  * Methods process their arguments synchronously and do not retain references
  * after returning. Once a method returns false, the producer must stop writing
  * because the response cannot continue, usually after a client disconnects.
+ * A successful WriteOk, WriteError, or EndRows finishes the response, so no
+ * further sink method may be called for that query.
  */
 class SqlResultSink {
 public:
@@ -82,7 +85,9 @@ public:
   virtual auto WriteOk(uint64_t affected_rows = 0,
                        const std::string &message = {}) -> bool = 0;
 
-  /** Write an ERR response. */
+  /**
+   * Write an ERR response, or terminate a row response that has already begun.
+   */
   virtual auto WriteError(const std::string &message) -> bool = 0;
 
   /** Start a row response and write its column metadata. */

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "protocol_constants.h"
+#include "result_encoder.h"
 
 namespace mysql_wire {
 
@@ -77,17 +78,16 @@ auto IsIgnoredSetStatement(const std::string &sql) -> bool {
   return HasPrefix(sql, "set ");
 }
 
-auto WriteOneStringRow(SqlResultSink &sink, const std::string &column,
-                       std::optional<std::string> value) -> bool {
-  const std::vector<SqlColumn> columns{
-      SqlColumn{column, ColumnType::VAR_STRING, true}};
+auto WriteOneStringRow(SqlResultSink &sink, SqlColumn column, SqlCell value)
+    -> bool {
+  const std::vector<SqlColumn> columns{std::move(column)};
   const SqlRow row{std::move(value)};
   return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
 }
 
 auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
                          uint32_t connection_id, std::string &current_database,
-                         SqlResultSink &sink) -> std::optional<bool> {
+                         MysqlResultSink &sink) -> std::optional<bool> {
   const auto normalized = NormalizeSql(sql);
   if (normalized.empty()) {
     return sink.WriteOk();
@@ -102,36 +102,42 @@ auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
   if (HasPrefix(normalized, "use ")) {
     const auto database = normalized.substr(4);
     if (!SelectDatabase(executor, database, current_database)) {
-      return sink.WriteError("unknown database: " + database);
+      return sink.WriteError(MYSQL_ERROR_BAD_DATABASE,
+                             "unknown database: " + database);
     }
     return sink.WriteOk();
   }
 
   if (normalized == "select database()" || normalized == "select schema()") {
+    const SqlColumn column{"database()", ColumnType::VAR_STRING, true};
     if (current_database.empty()) {
-      return WriteOneStringRow(sink, "database()", std::nullopt);
+      return WriteOneStringRow(sink, column, std::nullopt);
     }
-    return WriteOneStringRow(sink, "database()", current_database);
+    return WriteOneStringRow(sink, column, current_database);
   }
 
   if (HasPrefix(normalized, "select @@version_comment")) {
-    return WriteOneStringRow(sink, "@@version_comment", MYSQL_VERSION_COMMENT);
+    return WriteOneStringRow(
+        sink, SqlColumn{"@@version_comment", ColumnType::VAR_STRING, false},
+        MYSQL_VERSION_COMMENT);
   }
 
   if (HasPrefix(normalized, "select @@version")) {
-    return WriteOneStringRow(sink, "@@version", MYSQL_SERVER_VERSION);
+    return WriteOneStringRow(
+        sink, SqlColumn{"@@version", ColumnType::VAR_STRING, false},
+        MYSQL_SERVER_VERSION);
   }
 
   if (HasPrefix(normalized, "select connection_id()")) {
-    return WriteOneStringRow(sink, "connection_id()",
-                             std::to_string(connection_id));
+    return WriteOneStringRow(
+        sink, SqlColumn{"connection_id()", ColumnType::LONGLONG, false},
+        std::to_string(connection_id));
   }
 
   if (normalized == "show databases") {
-    const std::vector<SqlColumn> columns{
-        SqlColumn{"Database", ColumnType::VAR_STRING, false}};
-    const SqlRow row{executor.DatabaseName()};
-    return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
+    return WriteOneStringRow(
+        sink, SqlColumn{"Database", ColumnType::VAR_STRING, false},
+        executor.DatabaseName());
   }
 
   return std::nullopt;
@@ -156,7 +162,7 @@ auto SelectDatabase(const SqlExecutor &executor, const std::string &database,
 
 auto ExecuteQuery(SqlExecutor &executor, const std::string &sql,
                   uint32_t connection_id, std::string &current_database,
-                  SqlResultSink &sink) -> bool {
+                  MysqlResultSink &sink) -> bool {
   if (auto frontend_result = HandleFrontendQuery(executor, sql, connection_id,
                                                  current_database, sink);
       frontend_result.has_value()) {

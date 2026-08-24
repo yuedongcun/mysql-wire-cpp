@@ -37,11 +37,11 @@
 
 #include <cstdint>
 #include <exception>
-#include <iostream>
 #include <string>
 #include <utility>
 
 #include "handshake.h"
+#include "log.h"
 #include "protocol_constants.h"
 #include "query_dispatch.h"
 #include "result_encoder.h"
@@ -79,10 +79,9 @@ MysqlSession::MysqlSession(int fd, std::shared_ptr<SqlExecutor> executor,
       reader_(fd), writer_(fd) {}
 
 void MysqlSession::Run() {
-  std::clog << "MySQL session connection_id=" << connection_id_ << " started\n";
+  LogInfo("session id=", connection_id_, " started");
   if (!DoHandshake()) {
-    std::clog << "MySQL session connection_id=" << connection_id_
-              << " handshake failed\n";
+    LogWarning("session id=", connection_id_, " handshake failed");
     close(fd_);
     return;
   }
@@ -90,8 +89,7 @@ void MysqlSession::Run() {
   while (true) {
     auto packet = reader_.ReadPacket();
     if (!packet.has_value()) {
-      std::clog << "MySQL session connection_id=" << connection_id_
-                << " client disconnected\n";
+      LogInfo("session id=", connection_id_, " client disconnected");
       break;
     }
     if (!HandleCommand(packet.value())) {
@@ -99,14 +97,13 @@ void MysqlSession::Run() {
     }
   }
 
-  std::clog << "MySQL session connection_id=" << connection_id_ << " closed\n";
+  LogInfo("session id=", connection_id_, " closed");
   close(fd_);
 }
 
 auto MysqlSession::DoHandshake() -> bool {
-  std::clog << "MySQL session connection_id=" << connection_id_
-            << " sending handshake seq="
-            << static_cast<uint32_t>(HANDSHAKE_SEQUENCE_ID) << '\n';
+  LogInfo("session id=", connection_id_,
+          " handshake send seq=", static_cast<uint32_t>(HANDSHAKE_SEQUENCE_ID));
   if (!writer_.WritePacket(HANDSHAKE_SEQUENCE_ID,
                            MakeHandshakeV10Payload(connection_id_))) {
     return false;
@@ -116,13 +113,12 @@ auto MysqlSession::DoHandshake() -> bool {
   if (!response.has_value()) {
     return false;
   }
-  std::clog << "MySQL session connection_id=" << connection_id_
-            << " received handshake response seq="
-            << static_cast<uint32_t>(response->sequence_id_)
-            << " payload_len=" << response->payload_.size() << '\n';
+  LogInfo("session id=", connection_id_, " handshake response received seq=",
+          static_cast<uint32_t>(response->sequence_id_),
+          " bytes=", response->payload_.size());
 
   if (response->sequence_id_ != HANDSHAKE_RESPONSE_SEQUENCE_ID) {
-    SendError(HANDSHAKE_RESULT_SEQUENCE_ID, MYSQL_ERR_HANDSHAKE,
+    SendError(HANDSHAKE_RESULT_SEQUENCE_ID, MYSQL_ERROR_HANDSHAKE,
               "unexpected handshake response sequence id");
     return false;
   }
@@ -131,14 +127,14 @@ auto MysqlSession::DoHandshake() -> bool {
   std::string parse_error;
   if (!ParseHandshakeResponse41(response->payload_, handshake_response,
                                 parse_error)) {
-    SendError(HANDSHAKE_RESULT_SEQUENCE_ID, MYSQL_ERR_HANDSHAKE, parse_error);
+    SendError(HANDSHAKE_RESULT_SEQUENCE_ID, MYSQL_ERROR_HANDSHAKE, parse_error);
     return false;
   }
 
   if (!handshake_response.database_.empty() &&
       !SelectDatabase(*executor_, handshake_response.database_,
                       current_database_)) {
-    SendError(HANDSHAKE_RESULT_SEQUENCE_ID, MYSQL_ERR_BAD_DB,
+    SendError(HANDSHAKE_RESULT_SEQUENCE_ID, MYSQL_ERROR_BAD_DATABASE,
               "unknown database: " + handshake_response.database_);
     return false;
   }
@@ -146,51 +142,63 @@ auto MysqlSession::DoHandshake() -> bool {
   const uint32_t client_capabilities =
       handshake_response.capabilities_ & SERVER_CAPABILITIES;
 
-  std::clog << "MySQL session connection_id=" << connection_id_
-            << " user=" << handshake_response.username_ << " database="
-            << (current_database_.empty() ? "<none>" : current_database_)
-            << " capabilities=0x" << std::hex << client_capabilities << std::dec
-            << " charset="
-            << static_cast<uint32_t>(handshake_response.character_set_)
-            << " max_packet=" << handshake_response.max_packet_size_ << '\n';
+  LogInfo(
+      "session id=", connection_id_,
+      " handshake accepted user=", handshake_response.username_,
+      " database=", (current_database_.empty() ? "<none>" : current_database_),
+      " capabilities=0x", std::hex, client_capabilities, std::dec,
+      " charset=", static_cast<uint32_t>(handshake_response.character_set_),
+      " max_packet=", handshake_response.max_packet_size_);
 
   // A structurally valid handshake is accepted because this frontend has no
   // account or credential verification.
-  std::clog << "MySQL session connection_id=" << connection_id_
-            << " sending handshake OK seq="
-            << static_cast<uint32_t>(HANDSHAKE_RESULT_SEQUENCE_ID) << '\n';
+  LogInfo("session id=", connection_id_, " handshake OK send seq=",
+          static_cast<uint32_t>(HANDSHAKE_RESULT_SEQUENCE_ID));
 
   return writer_.WritePacket(HANDSHAKE_RESULT_SEQUENCE_ID,
                              MakeOkPayload(0, ""));
 }
 
+/**
+ * Command packet payloads handled by this session:
+ *
+ * @code{.text}
+ * +-------------+--------+----------------------------------+
+ * | command     | id     | bytes after the command id       |
+ * +-------------+--------+----------------------------------+
+ * | COM_QUIT    | 0x01   | empty                            |
+ * | COM_INIT_DB | 0x02   | database name                    |
+ * | COM_QUERY   | 0x03   | SQL text                         |
+ * | COM_PING    | 0x0E   | empty                            |
+ * +-------------+--------+----------------------------------+
+ * @endcode
+ */
 auto MysqlSession::HandleCommand(const MysqlPacket &packet) -> bool {
   if (packet.sequence_id_ != COMMAND_SEQUENCE_ID) {
-    SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERR_HANDSHAKE,
+    SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERROR_PACKETS_OUT_OF_ORDER,
               "unexpected command sequence id");
     return false;
   }
 
   if (packet.payload_.empty()) {
-    return SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERR_UNKNOWN,
+    return SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERROR_UNKNOWN_COMMAND,
                      "empty command packet");
   }
 
   auto command = static_cast<Command>(packet.payload_[0]);
-  std::clog << "MySQL session connection_id=" << connection_id_ << " received "
-            << CommandName(command)
-            << " seq=" << static_cast<uint32_t>(packet.sequence_id_)
-            << " payload_len=" << packet.payload_.size() << '\n';
+  LogInfo("session id=", connection_id_,
+          " command received type=", CommandName(command),
+          " seq=", static_cast<uint32_t>(packet.sequence_id_),
+          " bytes=", packet.payload_.size());
 
   switch (command) {
   case Command::QUIT:
-    std::clog << "MySQL session connection_id=" << connection_id_
-              << " received COM_QUIT\n";
+    LogInfo("session id=", connection_id_, " command quit");
     return false;
 
   case Command::PING:
-    std::clog << "MySQL session connection_id=" << connection_id_
-              << " replying OK to " << CommandName(command) << '\n';
+    LogInfo("session id=", connection_id_,
+            " command reply=OK type=", CommandName(command));
     return writer_.WritePacket(COMMAND_RESPONSE_SEQUENCE_ID,
                                MakeOkPayload(0, ""));
 
@@ -198,52 +206,45 @@ auto MysqlSession::HandleCommand(const MysqlPacket &packet) -> bool {
     const std::string database(packet.payload_.begin() + 1,
                                packet.payload_.end());
     if (!SelectDatabase(*executor_, database, current_database_)) {
-      return SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERR_BAD_DB,
+      return SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERROR_BAD_DATABASE,
                        "unknown database: " + database);
     }
-    std::clog << "MySQL session connection_id=" << connection_id_
-              << " replying OK to " << CommandName(command) << '\n';
+    LogInfo("session id=", connection_id_,
+            " command reply=OK type=", CommandName(command));
     return writer_.WritePacket(COMMAND_RESPONSE_SEQUENCE_ID,
                                MakeOkPayload(0, ""));
   }
 
   case Command::QUERY: {
     std::string sql(packet.payload_.begin() + 1, packet.payload_.end());
-    std::clog << "MySQL session connection_id=" << connection_id_
-              << " executing SQL: " << sql << '\n';
+    LogInfo("session id=", connection_id_, " query execute sql=", sql);
     MysqlResultSink sink(&writer_, COMMAND_RESPONSE_SEQUENCE_ID);
     try {
       const bool written = ExecuteQuery(*executor_, sql, connection_id_,
                                         current_database_, sink);
-      std::clog << "MySQL session connection_id=" << connection_id_
-                << " finished SQL response\n";
+      LogInfo("session id=", connection_id_, " query response finished");
       return written;
     } catch (const std::exception &ex) {
-      std::clog << "MySQL session connection_id=" << connection_id_
-                << " SQL execution failed: " << ex.what() << '\n';
-      if (sink.ResponseStarted()) {
-        return false;
-      }
-      return SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERR_UNKNOWN,
-                       ex.what());
+      LogError("session id=", connection_id_,
+               " query execution failed error=", ex.what());
+      return sink.WriteError(ex.what());
     }
   }
 
   default:
-    std::clog << "MySQL session connection_id=" << connection_id_
-              << " unsupported command=0x" << std::hex
-              << static_cast<uint32_t>(packet.payload_[0]) << std::dec << '\n';
-    return SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERR_UNKNOWN,
+    LogWarning("session id=", connection_id_, " command unsupported type=0x",
+               std::hex, static_cast<uint32_t>(packet.payload_[0]), std::dec);
+    return SendError(COMMAND_RESPONSE_SEQUENCE_ID, MYSQL_ERROR_UNKNOWN_COMMAND,
                      "unsupported MySQL command");
   }
 }
 
-auto MysqlSession::SendError(uint8_t sequence_id, uint16_t error_code,
+auto MysqlSession::SendError(uint8_t sequence_id, const MysqlError &error,
                              const std::string &message) -> bool {
-  std::clog << "MySQL session connection_id=" << connection_id_
-            << " sending ERR seq=" << static_cast<uint32_t>(sequence_id)
-            << " code=" << error_code << " message=" << message << '\n';
-  return writer_.WritePacket(sequence_id, MakeErrPayload(error_code, message));
+  LogWarning("session id=", connection_id_,
+             " response send type=ERR seq=", static_cast<uint32_t>(sequence_id),
+             " code=", error.code_, " message=", message);
+  return writer_.WritePacket(sequence_id, MakeErrPayload(error, message));
 }
 
 } // namespace mysql_wire

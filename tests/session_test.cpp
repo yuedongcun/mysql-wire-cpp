@@ -56,6 +56,22 @@ public:
   std::string last_sql_;
 };
 
+class FailingRowExecutor : public mysql_wire::SqlExecutor {
+public:
+  auto Execute(const std::string &, mysql_wire::SqlResultSink &sink)
+      -> bool override {
+    const std::vector<mysql_wire::SqlColumn> columns{
+        {"value", mysql_wire::ColumnType::VAR_STRING, false}};
+    if (!sink.BeginRows(columns) ||
+        !sink.WriteRow(mysql_wire::SqlRow{"first-result"})) {
+      return false;
+    }
+    throw std::runtime_error("row production failed");
+  }
+
+  auto DatabaseName() const -> std::string override { return "testdb"; }
+};
+
 class SessionHarness {
 public:
   explicit SessionHarness(std::shared_ptr<mysql_wire::SqlExecutor> executor) {
@@ -151,6 +167,20 @@ auto MakeCommand(mysql_wire::Command command, const std::string &body = {})
   return payload;
 }
 
+void RequireError(const mysql_wire::MysqlPacket &packet, uint8_t sequence_id,
+                  const mysql_wire::MysqlError &error) {
+  Require(packet.sequence_id_ == sequence_id, "ERR sequence mismatch");
+  Require(packet.payload_.size() >= 9 && packet.payload_[0] == 0xff,
+          "malformed ERR packet");
+  const uint16_t error_code = static_cast<uint16_t>(packet.payload_[1]) |
+                              static_cast<uint16_t>(packet.payload_[2] << 8U);
+  Require(error_code == error.code_, "ERR code mismatch");
+  Require(packet.payload_[3] == '#', "ERR SQLSTATE marker mismatch");
+  const std::string sql_state(packet.payload_.begin() + 4,
+                              packet.payload_.begin() + 9);
+  Require(sql_state == error.sql_state_, "ERR SQLSTATE mismatch");
+}
+
 auto ReadSingleColumnRows(mysql_wire::PacketReader *reader, size_t row_count)
     -> std::vector<std::string> {
   auto column_count = reader->ReadPacket();
@@ -238,10 +268,15 @@ void TestSessionHandlesControlAndCompatibilityCommands() {
               0, MakeCommand(mysql_wire::Command::INIT_DB, "missing")),
           "invalid database command write failed");
   auto bad_database = reader.ReadPacket();
-  Require(bad_database.has_value() && bad_database->sequence_id_ == 1 &&
-              !bad_database->payload_.empty() &&
-              bad_database->payload_[0] == 0xff,
-          "invalid database should return ERR");
+  Require(bad_database.has_value(), "invalid database should return ERR");
+  RequireError(*bad_database, 1, mysql_wire::MYSQL_ERROR_BAD_DATABASE);
+
+  Require(writer.WritePacket(
+              0, MakeCommand(mysql_wire::Command::QUERY, "USE missing")),
+          "invalid USE query write failed");
+  auto bad_use = reader.ReadPacket();
+  Require(bad_use.has_value(), "invalid USE should return ERR");
+  RequireError(*bad_use, 1, mysql_wire::MYSQL_ERROR_BAD_DATABASE);
 
   Require(writer.WritePacket(
               0, MakeCommand(mysql_wire::Command::INIT_DB, "testdb")),
@@ -266,6 +301,14 @@ void TestSessionHandlesControlAndCompatibilityCommands() {
   Require(executor->last_sql_.empty(),
           "compatibility query should not reach the executor");
 
+  Require(writer.WritePacket(0, std::vector<uint8_t>{0x7f}),
+          "unsupported command write failed");
+  auto unsupported_command = reader.ReadPacket();
+  Require(unsupported_command.has_value(),
+          "unsupported command should return ERR");
+  RequireError(*unsupported_command, 1,
+               mysql_wire::MYSQL_ERROR_UNKNOWN_COMMAND);
+
   Require(writer.WritePacket(0, MakeCommand(mysql_wire::Command::QUIT)),
           "quit write failed");
   harness.Join();
@@ -281,9 +324,40 @@ void TestSessionRejectsNonzeroCommandSequence() {
   Require(writer.WritePacket(7, MakeCommand(mysql_wire::Command::PING)),
           "invalid sequence command write failed");
   auto error = reader.ReadPacket();
-  Require(error.has_value() && error->sequence_id_ == 1 &&
-              !error->payload_.empty() && error->payload_[0] == 0xff,
-          "invalid command sequence should return ERR");
+  Require(error.has_value(), "invalid command sequence should return ERR");
+  RequireError(*error, 1, mysql_wire::MYSQL_ERROR_PACKETS_OUT_OF_ORDER);
+  harness.Join();
+}
+
+void TestSessionUsesErrToTerminateResultset() {
+  auto executor = std::make_shared<FailingRowExecutor>();
+  SessionHarness harness(executor);
+  mysql_wire::PacketReader reader(harness.ClientFd());
+  mysql_wire::PacketWriter writer(harness.ClientFd());
+  CompleteHandshake(&reader, &writer);
+
+  Require(writer.WritePacket(
+              0, MakeCommand(mysql_wire::Command::QUERY, "SELECT failing")),
+          "failing query write failed");
+  for (uint8_t sequence_id = 1; sequence_id <= 4; sequence_id++) {
+    auto packet = reader.ReadPacket();
+    Require(packet.has_value() && packet->sequence_id_ == sequence_id,
+            "partial resultset packet mismatch");
+  }
+  auto error = reader.ReadPacket();
+  Require(error.has_value(), "resultset should end with ERR");
+  RequireError(*error, 5, mysql_wire::MYSQL_ERROR_UNKNOWN);
+
+  Require(writer.WritePacket(0, MakeCommand(mysql_wire::Command::PING)),
+          "ping after resultset error write failed");
+  auto ping_result = reader.ReadPacket();
+  Require(ping_result.has_value() && ping_result->sequence_id_ == 1 &&
+              !ping_result->payload_.empty() &&
+              ping_result->payload_[0] == 0x00,
+          "session should continue after resultset ERR");
+
+  Require(writer.WritePacket(0, MakeCommand(mysql_wire::Command::QUIT)),
+          "quit write failed");
   harness.Join();
 }
 
@@ -294,6 +368,7 @@ auto main() -> int {
     TestSessionUsesInjectedExecutor();
     TestSessionHandlesControlAndCompatibilityCommands();
     TestSessionRejectsNonzeroCommandSequence();
+    TestSessionUsesErrToTerminateResultset();
   } catch (const std::exception &error) {
     std::cerr << "session_test failed: " << error.what() << '\n';
     return 1;

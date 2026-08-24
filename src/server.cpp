@@ -19,11 +19,11 @@
 
 #include <cerrno>
 #include <cstring>
-#include <iostream>
 #include <memory>
 #include <thread>
 #include <utility>
 
+#include "log.h"
 #include "session.h"
 
 namespace mysql_wire {
@@ -33,17 +33,17 @@ MysqlServer::MysqlServer(std::string host, int port,
     : host_(std::move(host)), port_(port), executor_(std::move(executor)) {}
 
 auto MysqlServer::ServeForever() -> int {
-  std::clog << "Starting MySQL frontend on " << host_ << ':' << port_ << '\n';
+  LogInfo("server starting host=", host_, " port=", port_);
 
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd < 0) {
-    std::cerr << "socket failed: " << std::strerror(errno) << std::endl;
+    LogError("server socket failed error=", std::strerror(errno));
     return 1;
   }
 
   int opt = 1;
   if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0) {
-    std::cerr << "setsockopt failed: " << std::strerror(errno) << std::endl;
+    LogError("server setsockopt failed error=", std::strerror(errno));
     close(server_fd);
     return 1;
   }
@@ -52,26 +52,25 @@ auto MysqlServer::ServeForever() -> int {
   address.sin_family = AF_INET;
   address.sin_port = htons(static_cast<uint16_t>(port_));
   if (inet_pton(AF_INET, host_.c_str(), &address.sin_addr) != 1) {
-    std::cerr << "invalid host: " << host_ << std::endl;
+    LogError("server invalid host=", host_);
     close(server_fd);
     return 1;
   }
 
   if (bind(server_fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) <
       0) {
-    std::cerr << "bind failed: " << std::strerror(errno) << std::endl;
+    LogError("server bind failed error=", std::strerror(errno));
     close(server_fd);
     return 1;
   }
 
   if (listen(server_fd, 16) < 0) {
-    std::cerr << "listen failed: " << std::strerror(errno) << std::endl;
+    LogError("server listen failed error=", std::strerror(errno));
     close(server_fd);
     return 1;
   }
 
-  std::cerr << "mysql-wire-cpp frontend listening on " << host_ << ":" << port_
-            << std::endl;
+  LogInfo("server listening host=", host_, " port=", port_);
 
   while (true) {
     sockaddr_in client_addr{};
@@ -82,7 +81,7 @@ auto MysqlServer::ServeForever() -> int {
       if (errno == EINTR) {
         continue;
       }
-      std::cerr << "accept failed: " << std::strerror(errno) << std::endl;
+      LogError("server accept failed error=", std::strerror(errno));
       close(server_fd);
       return 1;
     }
@@ -92,9 +91,9 @@ auto MysqlServer::ServeForever() -> int {
     auto *client_ip = inet_ntop(AF_INET, &client_addr.sin_addr, client_host,
                                 sizeof(client_host));
     auto client_port = ntohs(client_addr.sin_port);
-    std::clog << "Accepted MySQL client connection_id=" << connection_id
-              << " from " << (client_ip == nullptr ? "<unknown>" : client_ip)
-              << ':' << client_port << " fd=" << client_fd << '\n';
+    LogInfo("connection accepted id=", connection_id,
+            " peer=", (client_ip == nullptr ? "<unknown>" : client_ip), ':',
+            client_port, " fd=", client_fd);
 
     std::thread([client_fd, executor = executor_, connection_id] {
       MysqlSession session(client_fd, executor, connection_id);

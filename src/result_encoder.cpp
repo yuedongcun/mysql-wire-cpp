@@ -25,6 +25,28 @@ namespace {
 /**
  * MySQL 8.0.46 Protocol::ColumnDefinition41:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_query_response_text_resultset_column_definition.html
+ *
+ * ColumnDefinition41 payload emitted by this frontend:
+ *
+ * @code{.text}
+ * +----------------------+--------------+-----------------------+
+ * | field                | encoding     | value                 |
+ * +----------------------+--------------+-----------------------+
+ * | catalog              | lenenc str   | "def"                 |
+ * | schema               | lenenc str   | empty                 |
+ * | table                | lenenc str   | empty                 |
+ * | original table       | lenenc str   | empty                 |
+ * | name                 | lenenc str   | column name           |
+ * | original name        | lenenc str   | column name           |
+ * | fixed fields length  | 1 byte       | 0x0C                  |
+ * | character set        | 2 bytes LE   | default character set |
+ * | column length        | 4 bytes LE   | 1024                  |
+ * | type                 | 1 byte       | column type           |
+ * | flags                | 2 bytes LE   | 0 or NOT_NULL_FLAG    |
+ * | decimals             | 1 byte       | 0                     |
+ * | reserved             | 2 bytes      | 0                     |
+ * +----------------------+--------------+-----------------------+
+ * @endcode
  */
 auto MakeColumnDefinitionPayload(const SqlColumn &column)
     -> std::vector<uint8_t> {
@@ -51,6 +73,17 @@ auto MakeColumnDefinitionPayload(const SqlColumn &column)
 /**
  * MySQL 8.0.46 ProtocolText::ResultsetRow:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_query_response_text_resultset_row.html
+ *
+ * Each cell is encoded in column order:
+ *
+ * @code{.text}
+ * +----------------------+---------------------------+
+ * | SQL value            | encoding                  |
+ * +----------------------+---------------------------+
+ * | NULL                 | 1 byte, 0xFB              |
+ * | non-NULL             | length-encoded string     |
+ * +----------------------+---------------------------+
+ * @endcode
  */
 auto MakeRowPayload(const std::vector<std::optional<std::string>> &row)
     -> std::vector<uint8_t> {
@@ -70,6 +103,19 @@ auto MakeRowPayload(const std::vector<std::optional<std::string>> &row)
 /**
  * MySQL 8.0.46 OK_Packet:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_basic_ok_packet.html
+ *
+ * @code{.text}
+ * +----------------------+---------------------------+
+ * | field                | encoding                  |
+ * +----------------------+---------------------------+
+ * | header               | 1 byte, 0x00              |
+ * | affected rows        | length-encoded integer    |
+ * | last insert id       | length-encoded integer    |
+ * | status flags         | 2 bytes LE                |
+ * | warnings             | 2 bytes LE                |
+ * | info                 | remaining bytes, optional |
+ * +----------------------+---------------------------+
+ * @endcode
  */
 auto MakeOkPayload(uint64_t affected_rows, const std::string &message)
     -> std::vector<uint8_t> {
@@ -88,21 +134,43 @@ auto MakeOkPayload(uint64_t affected_rows, const std::string &message)
 /**
  * MySQL 8.0.46 ERR_Packet:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_basic_err_packet.html
+ *
+ * @code{.text}
+ * +----------------------+---------------------------+
+ * | field                | encoding                  |
+ * +----------------------+---------------------------+
+ * | header               | 1 byte, 0xFF              |
+ * | error code           | 2 bytes LE                |
+ * | SQL state marker     | 1 byte, '#'               |
+ * | SQL state            | 5 bytes                   |
+ * | error message        | remaining bytes           |
+ * +----------------------+---------------------------+
+ * @endcode
  */
-auto MakeErrPayload(uint16_t error_code, const std::string &message)
+auto MakeErrPayload(const MysqlError &error, const std::string &message)
     -> std::vector<uint8_t> {
   std::vector<uint8_t> payload;
-  AppendInt1(payload, 0xff);       // header
-  AppendInt2(payload, error_code); // error_code
-  AppendInt1(payload, '#');        // sql_state_marker
-  AppendBytes(payload, "HY000");   // sql_state
-  AppendBytes(payload, message);   // error_message
+  AppendInt1(payload, 0xff);              // header
+  AppendInt2(payload, error.code_);       // error_code
+  AppendInt1(payload, '#');               // sql_state_marker
+  AppendBytes(payload, error.sql_state_); // sql_state
+  AppendBytes(payload, message);          // error_message
   return payload;
 }
 
 /**
  * MySQL 8.0.46 EOF_Packet:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_basic_eof_packet.html
+ *
+ * @code{.text}
+ * +----------------------+---------------------------+
+ * | field                | encoding                  |
+ * +----------------------+---------------------------+
+ * | header               | 1 byte, 0xFE              |
+ * | warnings             | 2 bytes LE                |
+ * | status flags         | 2 bytes LE                |
+ * +----------------------+---------------------------+
+ * @endcode
  */
 auto MakeEofPayload() -> std::vector<uint8_t> {
   std::vector<uint8_t> payload;
@@ -112,29 +180,63 @@ auto MakeEofPayload() -> std::vector<uint8_t> {
   return payload;
 }
 
+auto MysqlResultSink::WriteOk(uint64_t affected_rows,
+                              const std::string &message) -> bool {
+  if (state_ != State::NOT_STARTED) {
+    return false;
+  }
+  if (!WriteNextPacket(MakeOkPayload(affected_rows, message))) {
+    return false;
+  }
+  state_ = State::FINISHED;
+  return true;
+}
+
+auto MysqlResultSink::WriteError(const std::string &message) -> bool {
+  return WriteError(MYSQL_ERROR_UNKNOWN, message);
+}
+
+auto MysqlResultSink::WriteError(const MysqlError &error,
+                                 const std::string &message) -> bool {
+  if (state_ != State::NOT_STARTED && state_ != State::WRITING_ROWS) {
+    return false;
+  }
+  if (!WriteNextPacket(MakeErrPayload(error, message))) {
+    return false;
+  }
+  state_ = State::FINISHED;
+  return true;
+}
+
 /**
  * MySQL 8.0.46 Text Resultset:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_query_response_text_resultset.html
  *
  * This frontend does not advertise CLIENT_OPTIONAL_RESULTSET_METADATA or
- * CLIENT_DEPRECATE_EOF, so ROWS results use this packet sequence:
+ * CLIENT_DEPRECATE_EOF, so a row response uses this packet sequence:
  *
- *   int<lenenc> column_count
- *   column_count x Protocol::ColumnDefinition41
- *   EOF_Packet
- *   0..N x ProtocolText::ResultsetRow
- *   EOF_Packet
+ * @code{.text}
+ * +----------------------+--------------------------------------+
+ * | packet order         | payload                              |
+ * +----------------------+--------------------------------------+
+ * | first                | column count, length-encoded integer |
+ * | next, per column     | ColumnDefinition41                   |
+ * | next                 | EOF, end of column metadata          |
+ * | next, per row        | ProtocolText::ResultsetRow           |
+ * | last                 | EOF, or ERR if row production fails  |
+ * +----------------------+--------------------------------------+
+ * @endcode
+ *
+ * WriteNextPacket increments the sequence id for every packet in this order.
+ * An ERR written while rows are being produced replaces the final EOF and
+ * terminates the resultset.
  */
-auto MysqlResultSink::WriteOk(uint64_t affected_rows,
-                              const std::string &message) -> bool {
-  return WriteNextPacket(MakeOkPayload(affected_rows, message));
-}
-
-auto MysqlResultSink::WriteError(const std::string &message) -> bool {
-  return WriteNextPacket(MakeErrPayload(MYSQL_ERR_UNKNOWN, message));
-}
-
 auto MysqlResultSink::BeginRows(const std::vector<SqlColumn> &columns) -> bool {
+  if (state_ != State::NOT_STARTED) {
+    return false;
+  }
+  state_ = State::WRITING_METADATA;
+
   std::vector<uint8_t> column_count;
   AppendLenEncodedInteger(column_count, columns.size()); // column_count
   if (!WriteNextPacket(column_count)) {
@@ -149,25 +251,41 @@ auto MysqlResultSink::BeginRows(const std::vector<SqlColumn> &columns) -> bool {
   }
 
   // EOF packet marking the end of column metadata.
-  return WriteNextPacket(MakeEofPayload());
+  if (!WriteNextPacket(MakeEofPayload())) {
+    return false;
+  }
+  state_ = State::WRITING_ROWS;
+  return true;
 }
 
 auto MysqlResultSink::WriteRow(const SqlRow &row) -> bool {
+  if (state_ != State::WRITING_ROWS) {
+    return false;
+  }
   return WriteNextPacket(MakeRowPayload(row));
 }
 
 auto MysqlResultSink::EndRows() -> bool {
+  if (state_ != State::WRITING_ROWS) {
+    return false;
+  }
   // EOF packet marking the end of the resultset.
-  return WriteNextPacket(MakeEofPayload());
+  if (!WriteNextPacket(MakeEofPayload())) {
+    return false;
+  }
+  state_ = State::FINISHED;
+  return true;
 }
 
 auto MysqlResultSink::WriteNextPacket(const std::vector<uint8_t> &payload)
     -> bool {
   const uint8_t sequence_id = next_sequence_id_;
   next_sequence_id_ = static_cast<uint8_t>(next_sequence_id_ + 1);
-  const bool written = writer_->WritePacket(sequence_id, payload);
-  response_started_ = response_started_ || written;
-  return written;
+  if (!writer_->WritePacket(sequence_id, payload)) {
+    state_ = State::WRITE_FAILED;
+    return false;
+  }
+  return true;
 }
 
 } // namespace mysql_wire

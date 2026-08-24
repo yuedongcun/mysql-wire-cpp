@@ -19,8 +19,10 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <iostream>
+#include <cstring>
 #include <vector>
+
+#include "log.h"
 
 namespace mysql_wire {
 
@@ -35,6 +37,8 @@ auto PacketReader::ReadFully(uint8_t *buffer, size_t length) -> bool {
       if (errno == EINTR) {
         continue;
       }
+      LogError("packet read failed fd=", fd_, " errno=", errno,
+               " message=", std::strerror(errno));
       return false;
     }
     offset += static_cast<size_t>(read_size);
@@ -56,7 +60,8 @@ auto PacketReader::ReadPacket() -> std::optional<MysqlPacket> {
                             (static_cast<uint32_t>(header[1]) << 8U) |
                             (static_cast<uint32_t>(header[2]) << 16U);
   if (payload_length == MYSQL_PACKET_FRAGMENT_LENGTH) {
-    std::clog << "Rejected fragmented MySQL packet: payload_length=0xFFFFFF\n";
+    LogWarning(
+        "packet read rejected reason=fragmented payload_length=0xFFFFFF");
     return std::nullopt;
   }
 
@@ -82,6 +87,8 @@ auto PacketWriter::WriteFully(const uint8_t *buffer, size_t length) -> bool {
       if (errno == EINTR) {
         continue;
       }
+      LogError("packet write failed fd=", fd_, " errno=", errno,
+               " message=", std::strerror(errno));
       return false;
     }
     offset += static_cast<size_t>(write_size);
@@ -96,8 +103,8 @@ auto PacketWriter::WriteFully(const uint8_t *buffer, size_t length) -> bool {
 auto PacketWriter::WritePacket(uint8_t sequence_id,
                                const std::vector<uint8_t> &payload) -> bool {
   if (payload.size() >= MYSQL_PACKET_FRAGMENT_LENGTH) {
-    std::clog << "Rejected fragmented MySQL response: payload_length="
-              << payload.size() << '\n';
+    LogWarning("packet write rejected reason=fragmented payload_length=",
+               payload.size());
     return false;
   }
 
@@ -140,7 +147,7 @@ void AppendInt8(std::vector<uint8_t> &buffer, uint64_t value) {
   AppendInt4(buffer, static_cast<uint32_t>((value >> 32ULL) & 0xffffffffULL));
 }
 
-void AppendBytes(std::vector<uint8_t> &buffer, const std::string &value) {
+void AppendBytes(std::vector<uint8_t> &buffer, std::string_view value) {
   buffer.insert(buffer.end(), value.begin(), value.end());
 }
 
@@ -150,6 +157,23 @@ void AppendNullTerminatedString(std::vector<uint8_t> &buffer,
   AppendInt1(buffer, 0);
 }
 
+/**
+ * MySQL length-encoded integer:
+ *
+ * @code{.text}
+ * +---------------------+--------------------------------+
+ * | value               | encoding                       |
+ * +---------------------+--------------------------------+
+ * | 0..250              | value in 1 byte                |
+ * | 251..0xFFFF         | 0xFC + 2-byte LE value         |
+ * | 0x10000..0xFFFFFF   | 0xFD + 3-byte LE value         |
+ * | larger              | 0xFE + 8-byte LE value         |
+ * +---------------------+--------------------------------+
+ * @endcode
+ *
+ * The 0xFB prefix is reserved for SQL NULL and is not produced by this
+ * integer encoder.
+ */
 void AppendLenEncodedInteger(std::vector<uint8_t> &buffer, uint64_t value) {
   if (value < 251) {
     AppendInt1(buffer, static_cast<uint8_t>(value));
@@ -169,6 +193,15 @@ void AppendLenEncodedInteger(std::vector<uint8_t> &buffer, uint64_t value) {
   AppendInt8(buffer, value);
 }
 
+/**
+ * MySQL length-encoded string:
+ *
+ * @code{.text}
+ * +----------------------------+----------------------+
+ * | byte length as lenenc int  | string bytes         |
+ * +----------------------------+----------------------+
+ * @endcode
+ */
 void AppendLenEncodedString(std::vector<uint8_t> &buffer,
                             const std::string &value) {
   AppendLenEncodedInteger(buffer, value.size());

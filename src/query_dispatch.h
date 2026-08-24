@@ -14,10 +14,12 @@
 
 namespace mysql_wire {
 
+class MysqlResultSink;
+
 auto SelectDatabase(const SqlExecutor &executor, const std::string &database,
                     std::string &current_database) -> bool;
 auto ExecuteQuery(SqlExecutor &executor, const std::string &sql,
                   uint32_t connection_id, std::string &current_database,
-                  SqlResultSink &sink) -> bool;
+                  MysqlResultSink &sink) -> bool;
 
 } // namespace mysql_wire

@@ -15,6 +15,7 @@
 
 #include "mysql_wire/mysql_wire.h"
 #include "packet.h"
+#include "protocol_constants.h"
 
 namespace mysql_wire {
 
@@ -41,7 +42,7 @@ private:
   auto DoHandshake() -> bool;
   /** @return true to continue the command loop; false to close the session */
   auto HandleCommand(const MysqlPacket &packet) -> bool;
-  auto SendError(uint8_t sequence_id, uint16_t error_code,
+  auto SendError(uint8_t sequence_id, const MysqlError &error,
                  const std::string &message) -> bool;
 
   int fd_;

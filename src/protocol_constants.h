@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 namespace mysql_wire {
 
@@ -32,9 +33,23 @@ constexpr const char *MYSQL_VERSION_COMMENT =
     "mysql-wire-cpp protocol frontend";
 constexpr const char *MYSQL_AUTH_PLUGIN_NAME = "mysql_native_password";
 constexpr uint8_t MYSQL_DEFAULT_CHARSET = 45; // utf8mb4_general_ci
-constexpr uint16_t MYSQL_ERR_HANDSHAKE = 1043;
-constexpr uint16_t MYSQL_ERR_BAD_DB = 1049;
-constexpr uint16_t MYSQL_ERR_UNKNOWN = 1105;
+
+/**
+ * Error code and SQLSTATE encoded together in an ERR_Packet.
+ *
+ * MySQL 8.0 server error message reference:
+ * https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
+ */
+struct MysqlError {
+  uint16_t code_;
+  std::string_view sql_state_;
+};
+
+constexpr MysqlError MYSQL_ERROR_HANDSHAKE{1043, "08S01"};
+constexpr MysqlError MYSQL_ERROR_BAD_DATABASE{1049, "42000"};
+constexpr MysqlError MYSQL_ERROR_UNKNOWN_COMMAND{1047, "08S01"};
+constexpr MysqlError MYSQL_ERROR_UNKNOWN{1105, "HY000"};
+constexpr MysqlError MYSQL_ERROR_PACKETS_OUT_OF_ORDER{1156, "08S01"};
 
 /**
  * MySQL command ids handled by the session command loop.
