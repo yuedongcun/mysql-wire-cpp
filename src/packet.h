@@ -23,6 +23,9 @@
 
 namespace mysql_wire {
 
+/** A payload of this length indicates that another packet fragment follows. */
+constexpr uint32_t MYSQL_PACKET_FRAGMENT_LENGTH = 0x00ffffffU;
+
 struct MysqlPacket {
   uint8_t sequence_id_{0};
   std::vector<uint8_t> payload_;
@@ -53,16 +56,16 @@ private:
   int fd_;
 };
 
-void AppendInt1(std::vector<uint8_t> *buffer, uint8_t value);
-void AppendInt2(std::vector<uint8_t> *buffer, uint16_t value);
-void AppendInt3(std::vector<uint8_t> *buffer, uint32_t value);
-void AppendInt4(std::vector<uint8_t> *buffer, uint32_t value);
-void AppendInt8(std::vector<uint8_t> *buffer, uint64_t value);
-void AppendBytes(std::vector<uint8_t> *buffer, const std::string &value);
-void AppendNullTerminatedString(std::vector<uint8_t> *buffer,
+void AppendInt1(std::vector<uint8_t> &buffer, uint8_t value);
+void AppendInt2(std::vector<uint8_t> &buffer, uint16_t value);
+void AppendInt3(std::vector<uint8_t> &buffer, uint32_t value);
+void AppendInt4(std::vector<uint8_t> &buffer, uint32_t value);
+void AppendInt8(std::vector<uint8_t> &buffer, uint64_t value);
+void AppendBytes(std::vector<uint8_t> &buffer, const std::string &value);
+void AppendNullTerminatedString(std::vector<uint8_t> &buffer,
                                 const std::string &value);
-void AppendLenEncodedInteger(std::vector<uint8_t> *buffer, uint64_t value);
-void AppendLenEncodedString(std::vector<uint8_t> *buffer,
+void AppendLenEncodedInteger(std::vector<uint8_t> &buffer, uint64_t value);
+void AppendLenEncodedString(std::vector<uint8_t> &buffer,
                             const std::string &value);
 
 } // namespace mysql_wire

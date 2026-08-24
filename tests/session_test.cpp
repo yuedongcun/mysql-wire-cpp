@@ -21,7 +21,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -41,11 +40,9 @@ void Require(bool condition, const std::string &message) {
 
 class FakeSqlExecutor : public mysql_wire::SqlExecutor {
 public:
-  auto Execute(const std::string &sql,
-               const mysql_wire::MysqlQueryContext &context,
-               mysql_wire::SqlResultSink &sink) -> bool override {
+  auto Execute(const std::string &sql, mysql_wire::SqlResultSink &sink)
+      -> bool override {
     last_sql_ = sql;
-    last_context_ = context;
     const std::vector<mysql_wire::SqlColumn> columns{
         {"value", mysql_wire::ColumnType::VAR_STRING, false}};
     const mysql_wire::SqlRow first_row{"first-result"};
@@ -54,10 +51,9 @@ public:
            sink.WriteRow(second_row) && sink.EndRows();
   }
 
-  auto DatabaseName() const -> std::string_view override { return "testdb"; }
+  auto DatabaseName() const -> std::string override { return "testdb"; }
 
   std::string last_sql_;
-  mysql_wire::MysqlQueryContext last_context_;
 };
 
 class SessionHarness {
@@ -103,16 +99,16 @@ auto MakeHandshakeResponse() -> std::vector<uint8_t> {
       mysql_wire::CLIENT_CONNECT_WITH_DB | mysql_wire::CLIENT_PROTOCOL_41 |
       mysql_wire::CLIENT_SECURE_CONNECTION | mysql_wire::CLIENT_PLUGIN_AUTH;
   std::vector<uint8_t> payload;
-  mysql_wire::AppendInt4(&payload, capabilities);
-  mysql_wire::AppendInt4(&payload, 1U << 24U);
-  mysql_wire::AppendInt1(&payload, mysql_wire::MYSQL_DEFAULT_CHARSET);
+  mysql_wire::AppendInt4(payload, capabilities);
+  mysql_wire::AppendInt4(payload, 1U << 24U);
+  mysql_wire::AppendInt1(payload, mysql_wire::MYSQL_DEFAULT_CHARSET);
   for (int i = 0; i < 23; i++) {
-    mysql_wire::AppendInt1(&payload, 0);
+    mysql_wire::AppendInt1(payload, 0);
   }
-  mysql_wire::AppendNullTerminatedString(&payload, "test-user");
-  mysql_wire::AppendInt1(&payload, 0);
-  mysql_wire::AppendNullTerminatedString(&payload, "testdb");
-  mysql_wire::AppendNullTerminatedString(&payload,
+  mysql_wire::AppendNullTerminatedString(payload, "test-user");
+  mysql_wire::AppendInt1(payload, 0);
+  mysql_wire::AppendNullTerminatedString(payload, "testdb");
+  mysql_wire::AppendNullTerminatedString(payload,
                                          mysql_wire::MYSQL_AUTH_PLUGIN_NAME);
   return payload;
 }
@@ -151,7 +147,7 @@ void CompleteHandshake(mysql_wire::PacketReader *reader,
 auto MakeCommand(mysql_wire::Command command, const std::string &body = {})
     -> std::vector<uint8_t> {
   std::vector<uint8_t> payload{static_cast<uint8_t>(command)};
-  mysql_wire::AppendBytes(&payload, body);
+  mysql_wire::AppendBytes(payload, body);
   return payload;
 }
 
@@ -160,24 +156,31 @@ auto ReadSingleColumnRows(mysql_wire::PacketReader *reader, size_t row_count)
   auto column_count = reader->ReadPacket();
   auto column_definition = reader->ReadPacket();
   auto metadata_eof = reader->ReadPacket();
-  Require(column_count.has_value() &&
+  Require(column_count.has_value() && column_count->sequence_id_ == 1 &&
               column_count->payload_ == std::vector<uint8_t>({1}),
           "column count mismatch");
-  Require(column_definition.has_value(), "missing column definition");
-  Require(metadata_eof.has_value() && metadata_eof->payload_[0] == 0xfe,
+  Require(column_definition.has_value() && column_definition->sequence_id_ == 2,
+          "column definition mismatch");
+  Require(metadata_eof.has_value() && metadata_eof->sequence_id_ == 3 &&
+              metadata_eof->payload_[0] == 0xfe,
           "missing metadata EOF");
 
   std::vector<std::string> values;
   for (size_t i = 0; i < row_count; i++) {
     auto row = reader->ReadPacket();
     Require(row.has_value() && !row->payload_.empty(), "missing result row");
+    Require(row->sequence_id_ == static_cast<uint8_t>(4 + i),
+            "result row sequence mismatch");
     Require(row->payload_[0] == row->payload_.size() - 1,
             "unexpected row encoding");
     values.emplace_back(row->payload_.begin() + 1, row->payload_.end());
   }
 
   auto resultset_eof = reader->ReadPacket();
-  Require(resultset_eof.has_value() && resultset_eof->payload_[0] == 0xfe,
+  Require(resultset_eof.has_value() &&
+              resultset_eof->sequence_id_ ==
+                  static_cast<uint8_t>(4 + row_count) &&
+              resultset_eof->payload_[0] == 0xfe,
           "missing resultset EOF");
   return values;
 }
@@ -191,9 +194,9 @@ void TestSessionUsesInjectedExecutor() {
   CompleteHandshake(&reader, &writer);
 
   std::vector<uint8_t> query;
-  mysql_wire::AppendInt1(&query,
+  mysql_wire::AppendInt1(query,
                          static_cast<uint8_t>(mysql_wire::Command::QUERY));
-  mysql_wire::AppendBytes(&query, "  SELECT delegated;  ");
+  mysql_wire::AppendBytes(query, "  SELECT delegated;  ");
   Require(writer.WritePacket(0, query), "query write failed");
 
   const auto rows = ReadSingleColumnRows(&reader, 2);
@@ -206,10 +209,6 @@ void TestSessionUsesInjectedExecutor() {
   harness.Join();
 
   Require(executor->last_sql_ == "SELECT delegated", "delegated SQL mismatch");
-  Require(executor->last_context_.connection_id_ == 42,
-          "connection id mismatch");
-  Require(executor->last_context_.current_database_ == "testdb",
-          "database context mismatch");
 }
 
 void TestSessionHandlesControlAndCompatibilityCommands() {
@@ -228,10 +227,19 @@ void TestSessionHandlesControlAndCompatibilityCommands() {
           "ping response mismatch");
 
   Require(writer.WritePacket(
+              0, MakeCommand(mysql_wire::Command::QUERY, "SET NAMES utf8mb4")),
+          "SET query write failed");
+  auto set_result = reader.ReadPacket();
+  Require(set_result.has_value() && set_result->sequence_id_ == 1 &&
+              !set_result->payload_.empty() && set_result->payload_[0] == 0x00,
+          "ignored SET statement should return OK");
+
+  Require(writer.WritePacket(
               0, MakeCommand(mysql_wire::Command::INIT_DB, "missing")),
           "invalid database command write failed");
   auto bad_database = reader.ReadPacket();
-  Require(bad_database.has_value() && !bad_database->payload_.empty() &&
+  Require(bad_database.has_value() && bad_database->sequence_id_ == 1 &&
+              !bad_database->payload_.empty() &&
               bad_database->payload_[0] == 0xff,
           "invalid database should return ERR");
 
@@ -239,7 +247,8 @@ void TestSessionHandlesControlAndCompatibilityCommands() {
               0, MakeCommand(mysql_wire::Command::INIT_DB, "testdb")),
           "database command write failed");
   auto database_result = reader.ReadPacket();
-  Require(database_result.has_value() && !database_result->payload_.empty() &&
+  Require(database_result.has_value() && database_result->sequence_id_ == 1 &&
+              !database_result->payload_.empty() &&
               database_result->payload_[0] == 0x00,
           "database selection should return OK");
 
@@ -248,11 +257,33 @@ void TestSessionHandlesControlAndCompatibilityCommands() {
           "compatibility query write failed");
   Require(ReadSingleColumnRows(&reader, 1)[0] == "testdb",
           "selected database result mismatch");
+
+  Require(writer.WritePacket(0, MakeCommand(mysql_wire::Command::QUERY,
+                                            "SELECT CONNECTION_ID()")),
+          "connection id query write failed");
+  Require(ReadSingleColumnRows(&reader, 1)[0] == "42",
+          "connection id result mismatch");
   Require(executor->last_sql_.empty(),
           "compatibility query should not reach the executor");
 
   Require(writer.WritePacket(0, MakeCommand(mysql_wire::Command::QUIT)),
           "quit write failed");
+  harness.Join();
+}
+
+void TestSessionRejectsNonzeroCommandSequence() {
+  auto executor = std::make_shared<FakeSqlExecutor>();
+  SessionHarness harness(executor);
+  mysql_wire::PacketReader reader(harness.ClientFd());
+  mysql_wire::PacketWriter writer(harness.ClientFd());
+  CompleteHandshake(&reader, &writer);
+
+  Require(writer.WritePacket(7, MakeCommand(mysql_wire::Command::PING)),
+          "invalid sequence command write failed");
+  auto error = reader.ReadPacket();
+  Require(error.has_value() && error->sequence_id_ == 1 &&
+              !error->payload_.empty() && error->payload_[0] == 0xff,
+          "invalid command sequence should return ERR");
   harness.Join();
 }
 
@@ -262,6 +293,7 @@ auto main() -> int {
   try {
     TestSessionUsesInjectedExecutor();
     TestSessionHandlesControlAndCompatibilityCommands();
+    TestSessionRejectsNonzeroCommandSequence();
   } catch (const std::exception &error) {
     std::cerr << "session_test failed: " << error.what() << '\n';
     return 1;

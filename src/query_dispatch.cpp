@@ -69,6 +69,14 @@ auto NormalizeSql(const std::string &sql) -> std::string {
   return collapsed;
 }
 
+/**
+ * The frontend has no session-variable system. SET statements are accepted as
+ * no-ops for mysql CLI startup compatibility.
+ */
+auto IsIgnoredSetStatement(const std::string &sql) -> bool {
+  return HasPrefix(sql, "set ");
+}
+
 auto WriteOneStringRow(SqlResultSink &sink, const std::string &column,
                        std::optional<std::string> value) -> bool {
   const std::vector<SqlColumn> columns{
@@ -78,8 +86,8 @@ auto WriteOneStringRow(SqlResultSink &sink, const std::string &column,
 }
 
 auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
-                         MysqlQueryContext *context, SqlResultSink &sink)
-    -> std::optional<bool> {
+                         uint32_t connection_id, std::string &current_database,
+                         SqlResultSink &sink) -> std::optional<bool> {
   const auto normalized = NormalizeSql(sql);
   if (normalized.empty()) {
     return sink.WriteOk();
@@ -87,23 +95,23 @@ auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
 
   // The mysql CLI sends setup and metadata probes before user queries. Handle
   // the small compatibility subset here instead of routing it to the backend.
-  if (HasPrefix(normalized, "set ")) {
+  if (IsIgnoredSetStatement(normalized)) {
     return sink.WriteOk();
   }
 
   if (HasPrefix(normalized, "use ")) {
     const auto database = normalized.substr(4);
-    if (!SelectDatabase(executor, context, database)) {
+    if (!SelectDatabase(executor, database, current_database)) {
       return sink.WriteError("unknown database: " + database);
     }
     return sink.WriteOk();
   }
 
   if (normalized == "select database()" || normalized == "select schema()") {
-    if (context->current_database_.empty()) {
+    if (current_database.empty()) {
       return WriteOneStringRow(sink, "database()", std::nullopt);
     }
-    return WriteOneStringRow(sink, "database()", context->current_database_);
+    return WriteOneStringRow(sink, "database()", current_database);
   }
 
   if (HasPrefix(normalized, "select @@version_comment")) {
@@ -116,13 +124,13 @@ auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
 
   if (HasPrefix(normalized, "select connection_id()")) {
     return WriteOneStringRow(sink, "connection_id()",
-                             std::to_string(context->connection_id_));
+                             std::to_string(connection_id));
   }
 
   if (normalized == "show databases") {
     const std::vector<SqlColumn> columns{
         SqlColumn{"Database", ColumnType::VAR_STRING, false}};
-    const SqlRow row{std::string(executor.DatabaseName())};
+    const SqlRow row{executor.DatabaseName()};
     return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
   }
 
@@ -131,27 +139,30 @@ auto HandleFrontendQuery(SqlExecutor &executor, const std::string &sql,
 
 } // namespace
 
-auto SelectDatabase(const SqlExecutor &executor, MysqlQueryContext *context,
-                    const std::string &database) -> bool {
+auto SelectDatabase(const SqlExecutor &executor, const std::string &database,
+                    std::string &current_database) -> bool {
   auto normalized = Lower(TrimSql(database));
   if (normalized.size() >= 2 && normalized.front() == '`' &&
       normalized.back() == '`') {
     normalized = normalized.substr(1, normalized.size() - 2);
   }
-  if (normalized != Lower(std::string(executor.DatabaseName()))) {
+  auto database_name = executor.DatabaseName();
+  if (normalized != Lower(database_name)) {
     return false;
   }
-  context->current_database_ = std::string(executor.DatabaseName());
+  current_database = std::move(database_name);
   return true;
 }
 
 auto ExecuteQuery(SqlExecutor &executor, const std::string &sql,
-                  MysqlQueryContext *context, SqlResultSink &sink) -> bool {
-  if (auto frontend_result = HandleFrontendQuery(executor, sql, context, sink);
+                  uint32_t connection_id, std::string &current_database,
+                  SqlResultSink &sink) -> bool {
+  if (auto frontend_result = HandleFrontendQuery(executor, sql, connection_id,
+                                                 current_database, sink);
       frontend_result.has_value()) {
     return frontend_result.value();
   }
-  return executor.Execute(TrimSql(sql), *context, sink);
+  return executor.Execute(TrimSql(sql), sink);
 }
 
 } // namespace mysql_wire

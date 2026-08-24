@@ -30,10 +30,10 @@ void Require(bool condition, const std::string &message) {
 
 void TestIntegerEncoding() {
   std::vector<uint8_t> buffer;
-  mysql_wire::AppendInt1(&buffer, 0x12);
-  mysql_wire::AppendInt2(&buffer, 0x3456);
-  mysql_wire::AppendInt3(&buffer, 0x789abc);
-  mysql_wire::AppendInt4(&buffer, 0xdef01234);
+  mysql_wire::AppendInt1(buffer, 0x12);
+  mysql_wire::AppendInt2(buffer, 0x3456);
+  mysql_wire::AppendInt3(buffer, 0x789abc);
+  mysql_wire::AppendInt4(buffer, 0xdef01234);
   const std::vector<uint8_t> expected{0x12, 0x56, 0x34, 0xbc, 0x9a,
                                       0x78, 0x34, 0x12, 0xf0, 0xde};
   Require(buffer == expected, "little-endian integer encoding mismatch");
@@ -41,9 +41,9 @@ void TestIntegerEncoding() {
 
 void TestLengthEncodedInteger() {
   std::vector<uint8_t> buffer;
-  mysql_wire::AppendLenEncodedInteger(&buffer, 250);
-  mysql_wire::AppendLenEncodedInteger(&buffer, 251);
-  mysql_wire::AppendLenEncodedInteger(&buffer, 0x10000);
+  mysql_wire::AppendLenEncodedInteger(buffer, 250);
+  mysql_wire::AppendLenEncodedInteger(buffer, 251);
+  mysql_wire::AppendLenEncodedInteger(buffer, 0x10000);
   const std::vector<uint8_t> expected{250,  0xfc, 0xfb, 0x00,
                                       0xfd, 0x00, 0x00, 0x01};
   Require(buffer == expected, "length-encoded integer mismatch");
@@ -67,6 +67,13 @@ void TestPacketRoundTrip() {
   close(sockets[1]);
 }
 
+void TestFragmentedPacketWriteIsRejected() {
+  mysql_wire::PacketWriter writer(-1);
+  const std::vector<uint8_t> payload(mysql_wire::MYSQL_PACKET_FRAGMENT_LENGTH);
+  Require(!writer.WritePacket(0, payload),
+          "fragment-sized payload should be rejected");
+}
+
 } // namespace
 
 auto main() -> int {
@@ -74,6 +81,7 @@ auto main() -> int {
     TestIntegerEncoding();
     TestLengthEncodedInteger();
     TestPacketRoundTrip();
+    TestFragmentedPacketWriteIsRejected();
   } catch (const std::exception &error) {
     std::cerr << "packet_test failed: " << error.what() << '\n';
     return 1;

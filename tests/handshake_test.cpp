@@ -26,16 +26,16 @@ void Require(bool condition, const std::string &message) {
 
 auto MakeHandshakeResponse(uint32_t capabilities) -> std::vector<uint8_t> {
   std::vector<uint8_t> payload;
-  mysql_wire::AppendInt4(&payload, capabilities);
-  mysql_wire::AppendInt4(&payload, 1U << 24U);
-  mysql_wire::AppendInt1(&payload, mysql_wire::MYSQL_DEFAULT_CHARSET);
+  mysql_wire::AppendInt4(payload, capabilities);
+  mysql_wire::AppendInt4(payload, 1U << 24U);
+  mysql_wire::AppendInt1(payload, mysql_wire::MYSQL_DEFAULT_CHARSET);
   for (int i = 0; i < 23; i++) {
-    mysql_wire::AppendInt1(&payload, 0);
+    mysql_wire::AppendInt1(payload, 0);
   }
-  mysql_wire::AppendNullTerminatedString(&payload, "test-user");
-  mysql_wire::AppendInt1(&payload, 0);
-  mysql_wire::AppendNullTerminatedString(&payload, "testdb");
-  mysql_wire::AppendNullTerminatedString(&payload,
+  mysql_wire::AppendNullTerminatedString(payload, "test-user");
+  mysql_wire::AppendInt1(payload, 0);
+  mysql_wire::AppendNullTerminatedString(payload, "testdb");
+  mysql_wire::AppendNullTerminatedString(payload,
                                          mysql_wire::MYSQL_AUTH_PLUGIN_NAME);
   return payload;
 }
@@ -68,14 +68,12 @@ void TestHandshakeResponse41() {
 
   mysql_wire::HandshakeResponse41 response;
   std::string error;
-  Require(mysql_wire::ParseHandshakeResponse41(payload, &response, &error),
+  Require(mysql_wire::ParseHandshakeResponse41(payload, response, error),
           "valid HandshakeResponse41 rejected: " + error);
   Require(response.capabilities_ == capabilities, "capabilities mismatch");
   Require(response.max_packet_size_ == 1U << 24U, "max packet size mismatch");
   Require(response.username_ == "test-user", "username mismatch");
   Require(response.database_ == "testdb", "database mismatch");
-  Require(response.auth_plugin_name_ == mysql_wire::MYSQL_AUTH_PLUGIN_NAME,
-          "auth plugin mismatch");
 }
 
 void TestSslRequestIsRejected() {
@@ -86,10 +84,20 @@ void TestSslRequestIsRejected() {
 
   mysql_wire::HandshakeResponse41 response;
   std::string error;
-  Require(!mysql_wire::ParseHandshakeResponse41(payload, &response, &error),
+  Require(!mysql_wire::ParseHandshakeResponse41(payload, response, error),
           "SSL request should be rejected");
   Require(error == "SSL is not supported by this frontend",
           "unexpected SSL rejection error");
+}
+
+void TestTruncatedHandshakeResponseIsRejected() {
+  const std::vector<uint8_t> payload(10, 0);
+  mysql_wire::HandshakeResponse41 response;
+  std::string error;
+  Require(!mysql_wire::ParseHandshakeResponse41(payload, response, error),
+          "truncated HandshakeResponse41 should be rejected");
+  Require(error == "malformed HandshakeResponse41 fixed fields",
+          "unexpected truncated packet error");
 }
 
 } // namespace
@@ -99,6 +107,7 @@ auto main() -> int {
     TestHandshakeV10Payload();
     TestHandshakeResponse41();
     TestSslRequestIsRejected();
+    TestTruncatedHandshakeResponseIsRejected();
   } catch (const std::exception &error) {
     std::cerr << "handshake_test failed: " << error.what() << '\n';
     return 1;

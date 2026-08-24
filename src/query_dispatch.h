@@ -7,15 +7,17 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "mysql_wire/mysql_wire.h"
 
 namespace mysql_wire {
 
-auto SelectDatabase(const SqlExecutor &executor, MysqlQueryContext *context,
-                    const std::string &database) -> bool;
+auto SelectDatabase(const SqlExecutor &executor, const std::string &database,
+                    std::string &current_database) -> bool;
 auto ExecuteQuery(SqlExecutor &executor, const std::string &sql,
-                  MysqlQueryContext *context, SqlResultSink &sink) -> bool;
+                  uint32_t connection_id, std::string &current_database,
+                  SqlResultSink &sink) -> bool;
 
 } // namespace mysql_wire

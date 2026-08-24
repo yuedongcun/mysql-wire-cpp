@@ -24,8 +24,8 @@ auto MakeEofPayload() -> std::vector<uint8_t>;
 /** SqlResultSink implementation that writes MySQL packets to one session. */
 class MysqlResultSink final : public SqlResultSink {
 public:
-  MysqlResultSink(PacketWriter *writer, uint8_t *sequence_id)
-      : writer_(writer), sequence_id_(sequence_id) {}
+  MysqlResultSink(PacketWriter *writer, uint8_t first_sequence_id)
+      : writer_(writer), next_sequence_id_(first_sequence_id) {}
 
   auto WriteOk(uint64_t affected_rows, const std::string &message)
       -> bool override;
@@ -38,8 +38,10 @@ public:
   auto ResponseStarted() const -> bool { return response_started_; }
 
 private:
+  auto WriteNextPacket(const std::vector<uint8_t> &payload) -> bool;
+
   PacketWriter *writer_;
-  uint8_t *sequence_id_;
+  uint8_t next_sequence_id_;
   bool response_started_{false};
 };
 

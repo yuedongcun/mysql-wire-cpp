@@ -50,11 +50,9 @@ class SqlExecutor {
 public:
   virtual ~SqlExecutor() = default;
 
-  virtual auto Execute(const std::string &sql,
-                       const MysqlQueryContext &context,
-                       SqlResultSink &sink) -> bool = 0;
+  virtual auto Execute(const std::string &sql, SqlResultSink &sink) -> bool = 0;
 
-  virtual auto DatabaseName() const -> std::string_view = 0;
+  virtual auto DatabaseName() const -> std::string = 0;
 };
 ```
 
@@ -80,7 +78,7 @@ public:
 
 当前实现覆盖从客户端连接到返回查询结果的基本链路：完成握手后接收 SQL，通过 `SqlExecutor` 交给后端执行，再经 `SqlResultSink` 逐行返回文本结果集。协议层还处理 ping、退出、OK 和错误响应。
 
-它不是完整的 MySQL Server：不负责用户认证、权限和 TLS，不支持 prepared statement、binary protocol 或大于等于 16 MiB 的 packet，也不提供连接治理和优雅停机。
+它不是完整的 MySQL Server：不负责用户认证、权限和 TLS，不支持 prepared statement、binary protocol 或 payload length 为 `0xFFFFFF` 的 continuation packet，单个 payload 最大为 `0xFFFFFE` 字节，也不提供连接治理和优雅停机。
 
 ## 在 Ubuntu 上运行 demo
 
@@ -204,9 +202,8 @@ mysql \
 
 class EngineExecutor final : public mysql_wire::SqlExecutor {
 public:
-  auto Execute(const std::string &sql,
-               const mysql_wire::MysqlQueryContext &context,
-               mysql_wire::SqlResultSink &sink) -> bool override {
+  auto Execute(const std::string &sql, mysql_wire::SqlResultSink &sink)
+      -> bool override {
     std::vector<mysql_wire::SqlColumn> columns{
         {"id", mysql_wire::ColumnType::LONGLONG, false},
         {"name", mysql_wire::ColumnType::VAR_STRING, true},
@@ -216,7 +213,7 @@ public:
     return sink.BeginRows(columns) && sink.WriteRow(row) && sink.EndRows();
   }
 
-  auto DatabaseName() const -> std::string_view override { return "demo"; }
+  auto DatabaseName() const -> std::string override { return "demo"; }
 };
 ```
 

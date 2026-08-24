@@ -26,25 +26,25 @@ public:
   explicit PayloadCursor(const std::vector<uint8_t> &payload)
       : payload_(payload) {}
 
-  auto ReadInt1(uint8_t *value) -> bool {
+  auto ReadInt1(uint8_t &value) -> bool {
     uint64_t decoded = 0;
-    if (!ReadLittleEndian(1, &decoded)) {
+    if (!ReadLittleEndianInteger(1, decoded)) {
       return false;
     }
-    *value = static_cast<uint8_t>(decoded);
+    value = static_cast<uint8_t>(decoded);
     return true;
   }
 
-  auto ReadInt4(uint32_t *value) -> bool {
+  auto ReadInt4(uint32_t &value) -> bool {
     uint64_t decoded = 0;
-    if (!ReadLittleEndian(4, &decoded)) {
+    if (!ReadLittleEndianInteger(4, decoded)) {
       return false;
     }
-    *value = static_cast<uint32_t>(decoded);
+    value = static_cast<uint32_t>(decoded);
     return true;
   }
 
-  auto ReadNullTerminatedString(std::string *value) -> bool {
+  auto ReadNullTerminatedString(std::string &value) -> bool {
     const auto begin = offset_;
     while (offset_ < payload_.size() && payload_[offset_] != 0) {
       offset_++;
@@ -52,8 +52,8 @@ public:
     if (offset_ == payload_.size()) {
       return false;
     }
-    value->assign(payload_.begin() + static_cast<ptrdiff_t>(begin),
-                  payload_.begin() + static_cast<ptrdiff_t>(offset_));
+    value.assign(payload_.begin() + static_cast<ptrdiff_t>(begin),
+                 payload_.begin() + static_cast<ptrdiff_t>(offset_));
     offset_++;
     return true;
   }
@@ -67,16 +67,17 @@ public:
   }
 
 private:
-  auto ReadLittleEndian(size_t length, uint64_t *value) -> bool {
-    if (length > payload_.size() - offset_) {
+  auto ReadLittleEndianInteger(size_t byte_count, uint64_t &value) -> bool {
+    if (byte_count > sizeof(uint64_t) ||
+        byte_count > payload_.size() - offset_) {
       return false;
     }
     uint64_t decoded = 0;
-    for (size_t i = 0; i < length; i++) {
+    for (size_t i = 0; i < byte_count; i++) {
       decoded |= static_cast<uint64_t>(payload_[offset_ + i]) << (i * 8U);
     }
-    offset_ += length;
-    *value = decoded;
+    offset_ += byte_count;
+    value = decoded;
     return true;
   }
 
@@ -84,11 +85,52 @@ private:
   size_t offset_{0};
 };
 
+/**
+ * Consume the client's authentication response without verifying credentials.
+ *
+ * Authentication is outside this frontend's scope. The field is still
+ * validated and consumed so later handshake fields start at the correct
+ * offset.
+ */
+auto SkipAuthenticationResponse(PayloadCursor &cursor, uint32_t capabilities)
+    -> bool {
+  if ((capabilities & CLIENT_SECURE_CONNECTION) != 0) {
+    uint8_t length = 0;
+    return cursor.ReadInt1(length) && cursor.Skip(length);
+  }
+
+  std::string ignored_response;
+  return cursor.ReadNullTerminatedString(ignored_response);
+}
+
 } // namespace
 
 /**
  * MySQL 8.0.46 Protocol::HandshakeV10:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_connection_phase_packets_protocol_handshake_v10.html
+ *
+ * HandshakeV10 payload emitted by this frontend:
+ *
+ * @code{.text}
+ * +------------------------------+-----------+
+ * | field                        | encoding  |
+ * +------------------------------+-----------+
+ * | protocol version             | 1 byte    |
+ * | server version               | NUL-term  |
+ * | connection id                | 4 bytes   |
+ * | auth plugin data part 1      | 8 bytes   |
+ * | filler                       | 1 byte    |
+ * | capability flags, lower half | 2 bytes   |
+ * | character set                | 1 byte    |
+ * | status flags                 | 2 bytes   |
+ * | capability flags, upper half | 2 bytes   |
+ * | auth plugin data length      | 1 byte    |
+ * | reserved                     | 10 bytes  |
+ * | auth plugin data part 2      | 12 bytes  |
+ * | auth plugin data terminator  | 1 byte    |
+ * | authentication plugin name   | NUL-term  |
+ * +------------------------------+-----------+
+ * @endcode
  */
 auto MakeHandshakeV10Payload(uint32_t connection_id) -> std::vector<uint8_t> {
   std::vector<uint8_t> payload;
@@ -96,28 +138,28 @@ auto MakeHandshakeV10Payload(uint32_t connection_id) -> std::vector<uint8_t> {
   // auth-plugin data and an advertised plugin name in the handshake packet.
   const std::string auth_plugin_data = "12345678abcdefghijkl";
 
-  AppendInt1(&payload, MYSQL_PROTOCOL_VERSION); // protocol_version
-  AppendNullTerminatedString(&payload, MYSQL_SERVER_VERSION); // server_version
-  AppendInt4(&payload, connection_id);                        // connection_id
-  AppendBytes(&payload,
+  AppendInt1(payload, MYSQL_PROTOCOL_VERSION);               // protocol_version
+  AppendNullTerminatedString(payload, MYSQL_SERVER_VERSION); // server_version
+  AppendInt4(payload, connection_id);                        // connection_id
+  AppendBytes(payload,
               auth_plugin_data.substr(0, 8)); // auth_plugin_data_part_1
-  AppendInt1(&payload, 0);                    // filler
-  AppendInt2(&payload, static_cast<uint16_t>(SERVER_CAPABILITIES &
-                                             0xffffU)); // capability_flags_1
-  AppendInt1(&payload, MYSQL_DEFAULT_CHARSET);          // character_set
-  AppendInt2(&payload, SERVER_STATUS_AUTOCOMMIT);       // status_flags
-  AppendInt2(&payload, static_cast<uint16_t>((SERVER_CAPABILITIES >> 16U) &
-                                             0xffffU)); // capability_flags_2
-  AppendInt1(&payload, static_cast<uint8_t>(auth_plugin_data.size() +
-                                            1)); // auth_plugin_data_len
+  AppendInt1(payload, 0);                     // filler
+  AppendInt2(payload, static_cast<uint16_t>(SERVER_CAPABILITIES &
+                                            0xffffU)); // capability_flags_1
+  AppendInt1(payload, MYSQL_DEFAULT_CHARSET);          // character_set
+  AppendInt2(payload, SERVER_STATUS_AUTOCOMMIT);       // status_flags
+  AppendInt2(payload, static_cast<uint16_t>((SERVER_CAPABILITIES >> 16U) &
+                                            0xffffU)); // capability_flags_2
+  AppendInt1(payload, static_cast<uint8_t>(auth_plugin_data.size() +
+                                           1)); // auth_plugin_data_len
   for (int i = 0; i < 10; i++) {
-    AppendInt1(&payload, 0); // reserved
+    AppendInt1(payload, 0); // reserved
   }
-  AppendBytes(&payload, auth_plugin_data.substr(8)); // auth_plugin_data_part_2
+  AppendBytes(payload, auth_plugin_data.substr(8)); // auth_plugin_data_part_2
   // mysql_native_password consumes a 20-byte challenge as a NUL-terminated
   // message. The trailing zero is framing, not part of the random challenge.
-  AppendInt1(&payload, 0);
-  AppendNullTerminatedString(&payload,
+  AppendInt1(payload, 0);
+  AppendNullTerminatedString(payload,
                              MYSQL_AUTH_PLUGIN_NAME); // auth_plugin_name
   return payload;
 }
@@ -125,63 +167,72 @@ auto MakeHandshakeV10Payload(uint32_t connection_id) -> std::vector<uint8_t> {
 /**
  * MySQL 8.0.46 Protocol::HandshakeResponse41:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_connection_phase_packets_protocol_handshake_response.html
+ *
+ * HandshakeResponse41 payload:
+ *
+ * @code{.text}
+ * +----------------------------+-----------+--------------------------+
+ * | field                      | encoding  | present when             |
+ * +----------------------------+-----------+--------------------------+
+ * | capability flags           | 4 bytes   | always                   |
+ * | maximum packet size        | 4 bytes   | always                   |
+ * | character set              | 1 byte    | always                   |
+ * | reserved                   | 23 bytes  | always                   |
+ * | username                   | NUL-term  | always                   |
+ * | auth response length       | 1 byte    | CLIENT_SECURE_CONNECTION |
+ * | auth response              | length    | CLIENT_SECURE_CONNECTION |
+ * | auth response              | NUL-term  | otherwise                |
+ * | database                   | NUL-term  | CLIENT_CONNECT_WITH_DB   |
+ * | authentication plugin name | NUL-term  | CLIENT_PLUGIN_AUTH       |
+ * +----------------------------+-----------+--------------------------+
+ * @endcode
  */
 auto ParseHandshakeResponse41(const std::vector<uint8_t> &payload,
-                              HandshakeResponse41 *response, std::string *error)
+                              HandshakeResponse41 &response, std::string &error)
     -> bool {
   PayloadCursor cursor(payload);
-  if (!cursor.ReadInt4(&response->capabilities_) ||
-      !cursor.ReadInt4(&response->max_packet_size_) ||
-      !cursor.ReadInt1(&response->character_set_) || !cursor.Skip(23)) {
-    *error = "malformed HandshakeResponse41 fixed fields";
+  if (!cursor.ReadInt4(response.capabilities_) ||
+      !cursor.ReadInt4(response.max_packet_size_) ||
+      !cursor.ReadInt1(response.character_set_) || !cursor.Skip(23)) {
+    error = "malformed HandshakeResponse41 fixed fields";
     return false;
   }
 
-  if ((response->capabilities_ & CLIENT_PROTOCOL_41) == 0) {
-    *error = "client does not support CLIENT_PROTOCOL_41";
+  if ((response.capabilities_ & CLIENT_PROTOCOL_41) == 0) {
+    error = "client does not support CLIENT_PROTOCOL_41";
     return false;
   }
 
-  if ((response->capabilities_ & CLIENT_SSL) != 0) {
-    *error = "SSL is not supported by this frontend";
+  if ((response.capabilities_ & CLIENT_SSL) != 0) {
+    error = "SSL is not supported by this frontend";
     return false;
   }
 
   const auto negotiated_capabilities =
-      response->capabilities_ & SERVER_CAPABILITIES;
+      response.capabilities_ & SERVER_CAPABILITIES;
 
-  if (!cursor.ReadNullTerminatedString(&response->username_)) {
-    *error = "malformed username in HandshakeResponse41";
+  if (!cursor.ReadNullTerminatedString(response.username_)) {
+    error = "malformed username in HandshakeResponse41";
     return false;
   }
 
-  if ((negotiated_capabilities & CLIENT_SECURE_CONNECTION) != 0) {
-    uint8_t auth_response_length = 0;
-    if (!cursor.ReadInt1(&auth_response_length) ||
-        !cursor.Skip(auth_response_length)) {
-      *error = "malformed secure authentication response";
-      return false;
-    }
-    response->auth_response_length_ = auth_response_length;
-  } else {
-    std::string auth_response;
-    if (!cursor.ReadNullTerminatedString(&auth_response)) {
-      *error = "malformed null-terminated authentication response";
-      return false;
-    }
-    response->auth_response_length_ = auth_response.size();
+  if (!SkipAuthenticationResponse(cursor, negotiated_capabilities)) {
+    error = "malformed authentication response";
+    return false;
   }
 
   if ((negotiated_capabilities & CLIENT_CONNECT_WITH_DB) != 0 &&
-      !cursor.ReadNullTerminatedString(&response->database_)) {
-    *error = "malformed database in HandshakeResponse41";
+      !cursor.ReadNullTerminatedString(response.database_)) {
+    error = "malformed database in HandshakeResponse41";
     return false;
   }
 
-  if ((negotiated_capabilities & CLIENT_PLUGIN_AUTH) != 0 &&
-      !cursor.ReadNullTerminatedString(&response->auth_plugin_name_)) {
-    *error = "malformed authentication plugin in HandshakeResponse41";
-    return false;
+  if ((negotiated_capabilities & CLIENT_PLUGIN_AUTH) != 0) {
+    std::string ignored_auth_plugin_name;
+    if (!cursor.ReadNullTerminatedString(ignored_auth_plugin_name)) {
+      error = "malformed authentication plugin in HandshakeResponse41";
+      return false;
+    }
   }
   return true;
 }

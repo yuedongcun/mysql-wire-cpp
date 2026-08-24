@@ -19,6 +19,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <vector>
 
 namespace mysql_wire {
@@ -54,6 +55,11 @@ auto PacketReader::ReadPacket() -> std::optional<MysqlPacket> {
   uint32_t payload_length = static_cast<uint32_t>(header[0]) |
                             (static_cast<uint32_t>(header[1]) << 8U) |
                             (static_cast<uint32_t>(header[2]) << 16U);
+  if (payload_length == MYSQL_PACKET_FRAGMENT_LENGTH) {
+    std::clog << "Rejected fragmented MySQL packet: payload_length=0xFFFFFF\n";
+    return std::nullopt;
+  }
+
   MysqlPacket packet;
   packet.sequence_id_ = header[3];
   packet.payload_.resize(payload_length);
@@ -89,14 +95,16 @@ auto PacketWriter::WriteFully(const uint8_t *buffer, size_t length) -> bool {
  */
 auto PacketWriter::WritePacket(uint8_t sequence_id,
                                const std::vector<uint8_t> &payload) -> bool {
-  if (payload.size() >= (1U << 24U)) {
+  if (payload.size() >= MYSQL_PACKET_FRAGMENT_LENGTH) {
+    std::clog << "Rejected fragmented MySQL response: payload_length="
+              << payload.size() << '\n';
     return false;
   }
 
   std::vector<uint8_t> header;
   header.reserve(4);
-  AppendInt3(&header, static_cast<uint32_t>(payload.size()));
-  AppendInt1(&header, sequence_id);
+  AppendInt3(header, static_cast<uint32_t>(payload.size()));
+  AppendInt1(header, sequence_id);
 
   if (!WriteFully(header.data(), header.size())) {
     return false;
@@ -107,42 +115,42 @@ auto PacketWriter::WritePacket(uint8_t sequence_id,
   return true;
 }
 
-void AppendInt1(std::vector<uint8_t> *buffer, uint8_t value) {
-  buffer->push_back(value);
+void AppendInt1(std::vector<uint8_t> &buffer, uint8_t value) {
+  buffer.push_back(value);
 }
 
-void AppendInt2(std::vector<uint8_t> *buffer, uint16_t value) {
-  buffer->push_back(static_cast<uint8_t>(value & 0xffU));
-  buffer->push_back(static_cast<uint8_t>((value >> 8U) & 0xffU));
+void AppendInt2(std::vector<uint8_t> &buffer, uint16_t value) {
+  buffer.push_back(static_cast<uint8_t>(value & 0xffU));
+  buffer.push_back(static_cast<uint8_t>((value >> 8U) & 0xffU));
 }
 
-void AppendInt3(std::vector<uint8_t> *buffer, uint32_t value) {
-  buffer->push_back(static_cast<uint8_t>(value & 0xffU));
-  buffer->push_back(static_cast<uint8_t>((value >> 8U) & 0xffU));
-  buffer->push_back(static_cast<uint8_t>((value >> 16U) & 0xffU));
+void AppendInt3(std::vector<uint8_t> &buffer, uint32_t value) {
+  buffer.push_back(static_cast<uint8_t>(value & 0xffU));
+  buffer.push_back(static_cast<uint8_t>((value >> 8U) & 0xffU));
+  buffer.push_back(static_cast<uint8_t>((value >> 16U) & 0xffU));
 }
 
-void AppendInt4(std::vector<uint8_t> *buffer, uint32_t value) {
+void AppendInt4(std::vector<uint8_t> &buffer, uint32_t value) {
   AppendInt2(buffer, static_cast<uint16_t>(value & 0xffffU));
   AppendInt2(buffer, static_cast<uint16_t>((value >> 16U) & 0xffffU));
 }
 
-void AppendInt8(std::vector<uint8_t> *buffer, uint64_t value) {
+void AppendInt8(std::vector<uint8_t> &buffer, uint64_t value) {
   AppendInt4(buffer, static_cast<uint32_t>(value & 0xffffffffULL));
   AppendInt4(buffer, static_cast<uint32_t>((value >> 32ULL) & 0xffffffffULL));
 }
 
-void AppendBytes(std::vector<uint8_t> *buffer, const std::string &value) {
-  buffer->insert(buffer->end(), value.begin(), value.end());
+void AppendBytes(std::vector<uint8_t> &buffer, const std::string &value) {
+  buffer.insert(buffer.end(), value.begin(), value.end());
 }
 
-void AppendNullTerminatedString(std::vector<uint8_t> *buffer,
+void AppendNullTerminatedString(std::vector<uint8_t> &buffer,
                                 const std::string &value) {
   AppendBytes(buffer, value);
   AppendInt1(buffer, 0);
 }
 
-void AppendLenEncodedInteger(std::vector<uint8_t> *buffer, uint64_t value) {
+void AppendLenEncodedInteger(std::vector<uint8_t> &buffer, uint64_t value) {
   if (value < 251) {
     AppendInt1(buffer, static_cast<uint8_t>(value));
     return;
@@ -161,7 +169,7 @@ void AppendLenEncodedInteger(std::vector<uint8_t> *buffer, uint64_t value) {
   AppendInt8(buffer, value);
 }
 
-void AppendLenEncodedString(std::vector<uint8_t> *buffer,
+void AppendLenEncodedString(std::vector<uint8_t> &buffer,
                             const std::string &value) {
   AppendLenEncodedInteger(buffer, value.size());
   AppendBytes(buffer, value);

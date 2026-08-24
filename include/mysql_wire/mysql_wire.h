@@ -4,17 +4,15 @@
 
 /**
  * @file mysql_wire.h
- * @brief Public API for embedding the MySQL Wire frontend into a SQL engine.
+ * @brief Public API for connecting a SQL engine to the MySQL Wire frontend.
  *
- * An embedding application implements SqlExecutor, constructs MysqlServer,
- * and writes query results to the supplied SqlResultSink:
+ * The application implements SqlExecutor and passes it to MysqlServer. For
+ * each query, the frontend calls SqlExecutor::Execute and supplies a
+ * SqlResultSink for writing the response:
  *
  * @code{.text}
  * mysql client -> MysqlServer -> SqlExecutor -> SqlResultSink -> client
  * @endcode
- *
- * Packet framing, handshake processing, session state, and response encoding
- * are implementation details and are intentionally absent from this header.
  */
 
 #pragma once
@@ -23,7 +21,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace mysql_wire {
@@ -34,7 +31,7 @@ namespace mysql_wire {
  * Protocol::ColumnDefinition41 type field:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/page_protocol_com_query_response_text_resultset_column_definition.html
  *
- * enum_field_types source definition:
+ * MySQL column type code definitions:
  * https://dev.mysql.com/doc/dev/mysql-server/8.0.46/field__types_8h_source.html
  */
 enum class ColumnType : uint8_t {
@@ -44,14 +41,6 @@ enum class ColumnType : uint8_t {
   LONGLONG = 0x08,
   /** MYSQL_TYPE_VAR_STRING: variable-length string. */
   VAR_STRING = 0xfd,
-};
-
-/** Connection-local values supplied to SQL execution. */
-struct MysqlQueryContext {
-  /** Connection id advertised during the handshake. */
-  uint32_t connection_id_{0};
-  /** Currently selected logical database, or empty if none is selected. */
-  std::string current_database_;
 };
 
 /** Column metadata used when encoding a MySQL text resultset. */
@@ -71,7 +60,7 @@ using SqlCell = std::optional<std::string>;
 using SqlRow = std::vector<SqlCell>;
 
 /**
- * Receives one SQL response and writes it to the connected MySQL client.
+ * Streams one SQL response to the connected MySQL client.
  *
  * An executor produces exactly one of these response shapes:
  *
@@ -81,8 +70,9 @@ using SqlRow = std::vector<SqlCell>;
  * BeginRows(columns) -> WriteRow(row) ... -> EndRows()
  * @endcode
  *
- * Methods consume their arguments before returning. A false return value means
- * the response could not be written, usually because the client disconnected.
+ * Methods process their arguments synchronously and do not retain references
+ * after returning. Once a method returns false, the producer must stop writing
+ * because the response cannot continue, usually after a client disconnects.
  */
 class SqlResultSink {
 public:
@@ -95,37 +85,50 @@ public:
   /** Write an ERR response. */
   virtual auto WriteError(const std::string &message) -> bool = 0;
 
-  /** Start a text resultset and write its column metadata. */
+  /** Start a row response and write its column metadata. */
   virtual auto BeginRows(const std::vector<SqlColumn> &columns) -> bool = 0;
 
-  /** Write one text resultset row. */
+  /** Write one row whose cell count and order match the column metadata. */
   virtual auto WriteRow(const SqlRow &row) -> bool = 0;
 
-  /** Finish the current text resultset. */
+  /** Finish the row response started by BeginRows. */
   virtual auto EndRows() -> bool = 0;
 };
 
-/** SQL execution boundary implemented by the embedding engine. */
+/** Implemented by the program that provides SQL query execution. */
 class SqlExecutor {
 public:
   virtual ~SqlExecutor() = default;
 
-  /** Execute SQL and write exactly one response through sink. */
-  virtual auto Execute(const std::string &sql, const MysqlQueryContext &context,
-                       SqlResultSink &sink) -> bool = 0;
+  /**
+   * Execute SQL and write exactly one response through sink.
+   *
+   * Calls for different client connections may run concurrently.
+   *
+   * @return true if the response was written; false if output cannot continue
+   */
+  virtual auto Execute(const std::string &sql, SqlResultSink &sink) -> bool = 0;
 
   /** @return the single logical database exposed by this executor */
-  virtual auto DatabaseName() const -> std::string_view = 0;
+  virtual auto DatabaseName() const -> std::string = 0;
 };
 
-/** TCP server that creates one MySQL protocol session per client. */
+/**
+ * TCP server that creates one MySQL protocol session per client.
+ *
+ * All sessions share the same SqlExecutor and may call it concurrently.
+ */
 class MysqlServer {
 public:
-  /** Create a MySQL frontend bound to the given host and port. */
+  /**
+   * Create a MySQL frontend bound to the given host and port.
+   *
+   * executor must be non-null and safe for concurrent calls.
+   */
   MysqlServer(std::string host, int port,
               std::shared_ptr<SqlExecutor> executor);
 
-  /** Listen for clients forever. */
+  /** Block while accepting clients; return nonzero after a listener error. */
   auto ServeForever() -> int;
 
 private:

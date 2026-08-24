@@ -18,28 +18,36 @@
 
 namespace mysql_wire {
 
+/**
+ * Owns the protocol state for one connected MySQL client.
+ *
+ * Run() performs the handshake, then processes commands sequentially until the
+ * client quits, disconnects, or a read/write failure occurs.
+ */
 class MysqlSession {
 public:
+  /**
+   * Create a session for fd. Run() closes fd before returning.
+   *
+   * executor is shared with other sessions and may be called concurrently.
+   */
   MysqlSession(int fd, std::shared_ptr<SqlExecutor> executor,
                uint32_t connection_id);
 
+  /** Run this connection synchronously until it closes. */
   void Run();
 
 private:
   auto DoHandshake() -> bool;
+  /** @return true to continue the command loop; false to close the session */
   auto HandleCommand(const MysqlPacket &packet) -> bool;
   auto SendError(uint8_t sequence_id, uint16_t error_code,
                  const std::string &message) -> bool;
 
   int fd_;
   std::shared_ptr<SqlExecutor> executor_;
-  uint32_t connection_id_;
-  uint32_t client_capabilities_{0};
-  uint32_t client_max_packet_size_{0};
-  uint8_t client_character_set_{0};
-  std::string username_;
-  std::string auth_plugin_name_;
-  MysqlQueryContext query_context_;
+  const uint32_t connection_id_;
+  std::string current_database_;
   PacketReader reader_;
   PacketWriter writer_;
 };

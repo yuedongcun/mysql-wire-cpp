@@ -15,7 +15,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -25,8 +24,8 @@ namespace {
 
 class DemoExecutor : public mysql_wire::SqlExecutor {
 public:
-  auto Execute(const std::string &sql, const mysql_wire::MysqlQueryContext &,
-               mysql_wire::SqlResultSink &sink) -> bool override {
+  auto Execute(const std::string &sql, mysql_wire::SqlResultSink &sink)
+      -> bool override {
     if (sql == "SELECT 1" || sql == "select 1") {
       mysql_wire::SqlColumn column{"1", mysql_wire::ColumnType::LONGLONG,
                                    false};
@@ -53,7 +52,7 @@ public:
         "demo executor supports only SELECT 1 and SELECT 'hello'");
   }
 
-  auto DatabaseName() const -> std::string_view override { return "demo"; }
+  auto DatabaseName() const -> std::string override { return "demo"; }
 };
 
 auto ParsePort(const char *value) -> int {
