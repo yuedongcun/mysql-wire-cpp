@@ -125,12 +125,14 @@ ctest --test-dir build --output-on-failure
 
 ```text
 Test project .../mysql-wire-cpp/build
-    Start 1: mysql_wire_packet_test
-1/2 Test #1: mysql_wire_packet_test ...........   Passed
-    Start 2: mysql_wire_session_test
-2/2 Test #2: mysql_wire_session_test ..........   Passed
+    Start 1: mysql_wire_handshake_test
+1/3 Test #1: mysql_wire_handshake_test ........   Passed
+    Start 2: mysql_wire_packet_test
+2/3 Test #2: mysql_wire_packet_test ...........   Passed
+    Start 3: mysql_wire_session_test
+3/3 Test #3: mysql_wire_session_test ..........   Passed
 
-100% tests passed, 0 tests failed out of 2
+100% tests passed, 0 tests failed out of 3
 ```
 
 ### 4. 启动 demo server

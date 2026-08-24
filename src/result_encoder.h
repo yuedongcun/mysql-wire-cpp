@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "internal/packet.h"
 #include "mysql_wire/mysql_wire.h"
+#include "packet.h"
 
 namespace mysql_wire {
 

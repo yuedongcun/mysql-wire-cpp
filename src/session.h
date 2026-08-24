@@ -12,10 +12,9 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <vector>
 
-#include "internal/packet.h"
 #include "mysql_wire/mysql_wire.h"
+#include "packet.h"
 
 namespace mysql_wire {
 
@@ -28,7 +27,6 @@ public:
 
 private:
   auto DoHandshake() -> bool;
-  auto MakeHandshakePayload() -> std::vector<uint8_t>;
   auto HandleCommand(const MysqlPacket &packet) -> bool;
   auto SendError(uint8_t sequence_id, uint16_t error_code,
                  const std::string &message) -> bool;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * @file sql_executor.cpp
+ * @file query_dispatch.cpp
  * @brief Routes mysql CLI compatibility queries into the result sink.
  *
  * Queries needed by common mysql CLI startup and metadata probes are answered
@@ -11,7 +11,7 @@
  * the configured SqlExecutor.
  */
 
-#include "mysql_wire/mysql_wire.h"
+#include "query_dispatch.h"
 
 #include <algorithm>
 #include <cctype>
@@ -20,8 +20,7 @@
 #include <utility>
 #include <vector>
 
-#include "internal/constants.h"
-#include "internal/sql_dispatch.h"
+#include "protocol_constants.h"
 
 namespace mysql_wire {
 

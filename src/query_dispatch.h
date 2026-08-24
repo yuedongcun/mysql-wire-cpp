@@ -2,7 +2,7 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
-/** @file sql_dispatch.h @brief Internal frontend compatibility query routing.
+/** @file query_dispatch.h @brief Internal frontend compatibility query routing.
  */
 
 #pragma once

@@ -24,7 +24,7 @@
 #include <thread>
 #include <utility>
 
-#include "internal/session.h"
+#include "session.h"
 
 namespace mysql_wire {
 

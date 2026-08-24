@@ -2,7 +2,7 @@
 // Copyright (c) 2026 mysql-wire-cpp contributors.
 // SPDX-License-Identifier: MIT
 
-/** @file constants.h @brief Internal MySQL wire protocol constants. */
+/** @file protocol_constants.h @brief Internal MySQL wire protocol constants. */
 
 #pragma once
 

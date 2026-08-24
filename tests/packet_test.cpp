@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-#include "internal/packet.h"
+#include "packet.h"
 
 namespace {
 

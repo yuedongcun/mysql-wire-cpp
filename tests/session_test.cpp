@@ -26,10 +26,10 @@
 #include <utility>
 #include <vector>
 
-#include "internal/constants.h"
-#include "internal/packet.h"
-#include "internal/session.h"
 #include "mysql_wire/mysql_wire.h"
+#include "packet.h"
+#include "protocol_constants.h"
+#include "session.h"
 
 namespace {
 

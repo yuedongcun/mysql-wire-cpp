@@ -11,11 +11,12 @@ option(MYSQL_WIRE_BUILD_TESTS "Build protocol tests" ON)
 add_library(
   mysql_wire
   STATIC
+  src/handshake.cpp
   src/packet.cpp
+  src/query_dispatch.cpp
   src/result_encoder.cpp
   src/server.cpp
-  src/session.cpp
-  src/sql_executor.cpp)
+  src/session.cpp)
 add_library(mysql-wire-cpp::mysql_wire ALIAS mysql_wire)
 
 target_compile_features(mysql_wire PUBLIC cxx_std_17)
@@ -34,6 +35,11 @@ endif()
 
 if(MYSQL_WIRE_BUILD_TESTS)
   enable_testing()
+
+  add_executable(mysql_wire_handshake_test tests/handshake_test.cpp)
+  target_include_directories(mysql_wire_handshake_test PRIVATE src)
+  target_link_libraries(mysql_wire_handshake_test PRIVATE mysql_wire)
+  add_test(NAME mysql_wire_handshake_test COMMAND mysql_wire_handshake_test)
 
   add_executable(mysql_wire_packet_test tests/packet_test.cpp)
   target_include_directories(mysql_wire_packet_test PRIVATE src)
